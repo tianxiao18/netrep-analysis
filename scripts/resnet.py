@@ -21,6 +21,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--output_path",
+        type=str,
+        default="/mnt/home/the10/netrep-analysis/experiments/exp_resnet"
+    )
+
+    parser.add_argument(
         "--batch_size",
         type=int,
         default=4096
@@ -102,13 +108,13 @@ def main():
         lr_scheduler.step()
 
         print(f"[Epoch {epoch+1}/{args.epochs}] "
-              f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}% | "
+              f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, "
               f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "resnet50_imagenet.pth")
-            print("Model saved to resnet50_imagenet.pth")
+            torch.save(model.state_dict(), f"{args.output_path}/checkpoints/best_model.pth")
+            print(f"Model saved to {args.output_path}/checkpoints/best_model.pth")
 
     # Final test evaluation
     test_loss, test_acc = evaluate(model, test_loader, criterion, device)

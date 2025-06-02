@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/%x-%j.out
+#SBATCH --output=experiments/exp_resnet/%x-%j.out
 
 # Load modules (if needed)
 # module load python/3.10.13  # Or whatever you use
