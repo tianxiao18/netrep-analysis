@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+from .blur import add_fixed_blur
 
 # Loss with label smoothing
 class LabelSmoothingCrossEntropy(nn.Module):
@@ -37,13 +38,14 @@ def get_lr_scheduler(optimizer, warmup_epochs, total_epochs):
             return 0.5 * (1 + torch.cos(torch.tensor((epoch - warmup_epochs) / (total_epochs - warmup_epochs) * 3.1415926535)))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-def train(model, dataloader, criterion, optimizer, device):
+def train(model, dataloader, criterion, optimizer, device, sigma):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
     pbar = tqdm(dataloader, desc="Training", leave=False)
 
     for images, labels in pbar:
         images, labels = images.to(device), labels.to(device)
+        images = add_fixed_blur(images, sigma=sigma)
 
         optimizer.zero_grad()
         outputs = model(images)
@@ -58,12 +60,13 @@ def train(model, dataloader, criterion, optimizer, device):
 
     return total_loss / total, 100.0 * correct / total
 
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, sigma):
     model.eval()
     total_loss, correct, total = 0.0, 0, 0
     with torch.no_grad():
         for images, labels in dataloader:
             images, labels = images.to(device), labels.to(device)
+            # images = add_fixed_blur(images, sigma=sigma)
             outputs = model(images)
             loss = criterion(outputs, labels)
 
