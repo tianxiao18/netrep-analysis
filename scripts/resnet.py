@@ -4,6 +4,7 @@ import torch.optim as optim
 
 import os
 import sys
+import wandb
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
@@ -15,6 +16,13 @@ from argparse import ArgumentParser
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
     parser.add_argument(
+        "--sigma",
+        type=int,
+        default=0,
+        help="Guassian kernel size for image blurring"
+    )
+
+    parser.add_argument(
         "--data_path",
         type=str,
         default="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet"
@@ -23,19 +31,19 @@ def parse_args():
     parser.add_argument(
         "--output_path",
         type=str,
-        default="/mnt/home/the10/netrep-analysis/experiments/exp_resnet"
+        default="/mnt/home/the10/netrep-analysis/experiments"
     )
 
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=4096
+        default=256
     )
 
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=64
+        default=32
     )
 
     parser.add_argument(
@@ -89,7 +97,7 @@ def main():
 
     print("Setting up dataloader...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_loader, val_loader, test_loader = get_dataloaders(args.data_path, args.batch_size, args.num_workers)
+    train_loader, val_loader = get_dataloaders(args.data_path, args.batch_size, args.num_workers)
     model = get_model(device)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
@@ -101,23 +109,43 @@ def main():
     lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
     best_val_acc = 0
 
+    wandb.init(
+        project="resnet-imagenet", 
+        name=f"resnet_sigma_{args.sigma}",          
+        config={                             
+            "epochs": args.epochs,
+            "sigma": args.sigma,
+            "batch_size": args.batch_size,
+            "base_lr": args.base_lr,
+            "momentum": args.momentum,
+            "weight_decay": args.weight_decay,
+            "label_smoothing": args.label_smoothing
+        }
+    )
+    dir_path = os.path.join(args.output_path, f"exp_resnet_sigma_{args.sigma}")
+    os.makedirs(os.path.join(dir_path, "checkpoints"), exist_ok=True)
+
     print("Training model...")
+    val_loss, val_acc = evaluate(model, val_loader, criterion, device, args.sigma)
+    print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+
     for epoch in range(args.epochs):
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, args.sigma)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device, args.sigma)
         lr_scheduler.step()
 
         print(f"[Epoch {epoch+1}/{args.epochs}] "
-              f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, "
-              f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+              f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+        wandb.log({"epoch": epoch, "train_loss": train_loss, "train_acc": train_acc,
+            "val_loss": val_loss, "val_acc": val_acc, "lr": optimizer.param_groups[0]['lr']})
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), f"{args.output_path}/checkpoints/best_model.pth")
-            print(f"Model saved to {args.output_path}/checkpoints/best_model.pth")
+            torch.save(model.state_dict(), f"{dir_path}/checkpoints/best_model.pth")
+            print(f"Model saved to {dir_path}/checkpoints/best_model.pth")
 
     # Final test evaluation
-    test_loss, test_acc = evaluate(model, test_loader, criterion, device)
+    test_loss, test_acc = evaluate(model, val_loader, criterion, device)
     print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%")
 
 if __name__ == "__main__":

@@ -22,24 +22,23 @@ def get_transforms():
     return train_transform, eval_transform
 
 def get_dataloaders(data_dir, batch_size, num_workers, val_ratio=0.1, seed=42):
+    # train_dataset, val_dataset = get_split_datasets(
+    #     train_dir="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet/train",
+    #     val_ratio=val_ratio,
+    #     seed=seed,
+    #     train_transform=train_tf,
+    #     val_transform=eval_tf
+    # )
     train_tf, eval_tf = get_transforms()
-    train_dataset, val_dataset = get_split_datasets(
-        train_dir="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet/train",
-        val_ratio=val_ratio,
-        seed=seed,
-        train_transform=train_tf,
-        val_transform=eval_tf
-    )
-    test_dataset = datasets.ImageFolder(os.path.join(data_dir, "val"), eval_tf)
+    train_dataset = datasets.ImageFolder(os.path.join(data_dir, "train"), train_tf)
+    val_dataset = datasets.ImageFolder(os.path.join(data_dir, "val"), eval_tf)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers, pin_memory=True)
-
-    return train_loader, val_loader, test_loader
+    
+    return train_loader, val_loader
 
 def get_split_datasets(train_dir, val_ratio=0.1, seed=42, train_transform=None, val_transform=None):
     full_dataset = datasets.ImageFolder(train_dir)

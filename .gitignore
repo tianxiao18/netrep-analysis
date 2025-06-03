@@ -2,3 +2,5 @@ venv
 datasets
 __pycache__
 wandb
+*.out
+*.pth
