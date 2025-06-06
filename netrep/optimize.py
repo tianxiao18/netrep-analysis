@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
+import torchvision
+import matplotlib.pyplot as plt
 from tqdm import tqdm
-from .blur import add_fixed_blur
+from .blur import add_fixed_blur, add_random_blur, add_random_blur_no_gray
 
 # Loss with label smoothing
 class LabelSmoothingCrossEntropy(nn.Module):
@@ -38,14 +40,20 @@ def get_lr_scheduler(optimizer, warmup_epochs, total_epochs):
             return 0.5 * (1 + torch.cos(torch.tensor((epoch - warmup_epochs) / (total_epochs - warmup_epochs) * 3.1415926535)))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-def train(model, dataloader, criterion, optimizer, device, sigma):
+def train(model, dataloader, criterion, optimizer, device, blur, sigma):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
     pbar = tqdm(dataloader, desc="Training", leave=False)
 
     for images, labels in pbar:
         images, labels = images.to(device), labels.to(device)
-        images = add_fixed_blur(images, sigma=sigma)
+
+        if blur == "fixed_blur":
+            images = add_fixed_blur(images, sigma=sigma)
+        elif blur == "strong_random_blur":
+            images = add_random_blur_no_gray(images, [0, 1, 2, 4, 8], [0.2, 0.2, 0.2, 0.2, 0.2])
+        elif blur == "weak_random_blur":
+            images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], [0.6937, 0.2129, 0.0653, 0.0200, 0.0062, 0.0019])
 
         optimizer.zero_grad()
         outputs = model(images)
@@ -67,6 +75,8 @@ def evaluate(model, dataloader, criterion, device, sigma):
         for images, labels in dataloader:
             images, labels = images.to(device), labels.to(device)
             # images = add_fixed_blur(images, sigma=sigma)
+            # images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], [0.6937, 0.2129, 0.0653, 0.0200, 0.0062, 0.0019]) # v6 - Sigma0to5 V1
+            images = add_random_blur_no_gray(images, [0], [1])
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -76,3 +86,19 @@ def evaluate(model, dataloader, criterion, device, sigma):
             total += labels.size(0)
 
     return total_loss / total, 100.0 * correct / total
+
+def show_images(images, title=""):
+    # Undo normalization if applied
+    inv_normalize = torchvision.transforms.Normalize(
+        mean=[-m/s for m, s in zip([0.485, 0.456, 0.406],
+                                   [0.229, 0.224, 0.225])],
+        std=[1/s for s in [0.229, 0.224, 0.225]]
+    )
+    images = inv_normalize(images)
+
+    grid_img = torchvision.utils.make_grid(images[:8], nrow=4)
+    npimg = grid_img.cpu().numpy().transpose(1, 2, 0)
+    plt.imshow(npimg)
+    plt.title(title)
+    plt.axis("off")
+    plt.savefig('check.png')

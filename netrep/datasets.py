@@ -11,13 +11,13 @@ def get_transforms():
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        normalize
+        # normalize
     ])
     eval_transform = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
-        normalize
+        # normalize
     ])
     return train_transform, eval_transform
 

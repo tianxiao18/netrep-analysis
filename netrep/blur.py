@@ -30,7 +30,7 @@ def add_random_blur(images, sigmas, weights):
 
 
 def add_fixed_blur(images, sigma):
-    if sigma == 0:
+    if sigma is None:
         return images
     
     kernel_size = 2 * int(2.0 * sigma + 0.5) + 1
@@ -44,5 +44,51 @@ def add_fixed_blur(images, sigma):
     mean = torch.tensor([0.485, 0.456, 0.406], device=images.device).view(1, 3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225], device=images.device).view(1, 3, 1, 1)
     blurred_images = (blurred_images - mean) / std
+
+    return blurred_images
+
+def add_random_blur_no_gray(images, sigmas, weights, seed=66):
+    blurred_images = torch.empty_like(images)
+
+    B, C, H, W = images.shape
+    device = images.device
+    
+    weights = np.asarray(weights).astype('float64')
+    weights = weights / weights.sum()
+
+    # Sample one sigma per image
+    np.random.seed(seed)
+    sampled_sigmas = np.random.choice(sigmas, size=B, p=weights)
+    sampled_sigmas_tensor = torch.tensor(sampled_sigmas, dtype=torch.float32, device=device)
+
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+     # For each unique sigma, apply batch blur to matching images
+    unique_sigmas = torch.unique(sampled_sigmas_tensor)
+    for sigma_val in unique_sigmas:
+        indices = (sampled_sigmas_tensor == sigma_val).nonzero(as_tuple=True)[0]
+        imgs_to_blur = images[indices]
+
+        if sigma_val.item() == 0:
+            blurred = imgs_to_blur
+        else:
+            sigma = sigma_val.item()
+            kernel_size = 2 * math.ceil(2.0 * sigma) + 1
+
+            blurred = kornia.filters.gaussian_blur2d(
+                imgs_to_blur,  # (T, C, H, W)
+                kernel_size=(kernel_size, kernel_size),
+                sigma=(sigma, sigma)
+            )
+
+        blurred = torch.stack([normalize(img) for img in blurred])
+        blurred_images[indices] = blurred
+
+        # if sigma == 8:
+        #     import torchvision.utils as vutils
+        #     import os
+        #     os.makedirs("blur_debug", exist_ok=True)
+        #     vutils.save_image(image, "blur_debug/original.png")
+        #     vutils.save_image(blurred_image, "blur_debug/blurred.png")
 
     return blurred_images

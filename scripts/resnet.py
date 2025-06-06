@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument(
         "--sigma",
         type=int,
-        default=0,
+        default=None,
         help="Guassian kernel size for image blurring"
     )
 
@@ -29,21 +29,21 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--output_path",
+        "--experiment",
         type=str,
-        default="/mnt/home/the10/netrep-analysis/experiments"
+        default="weak_random_blur"
     )
 
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=256
+        default=4096
     )
 
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=32
+        default=64
     )
 
     parser.add_argument(
@@ -108,10 +108,11 @@ def main():
     )
     lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
     best_val_acc = 0
+    title = f"resnet_{args.experiment}" if args.sigma is None else f"resnet_{args.experiment}_sigma{args.sigma}"
 
     wandb.init(
         project="resnet-imagenet", 
-        name=f"resnet_sigma_{args.sigma}",          
+        name=title,          
         config={                             
             "epochs": args.epochs,
             "sigma": args.sigma,
@@ -122,15 +123,14 @@ def main():
             "label_smoothing": args.label_smoothing
         }
     )
-    dir_path = os.path.join(args.output_path, f"exp_resnet_sigma_{args.sigma}")
-    os.makedirs(os.path.join(dir_path, "checkpoints"), exist_ok=True)
+    output_path = f"/mnt/home/the10/netrep-analysis/experiments/{args.experiment}"
+    if args.sigma is not None:
+        output_path = os.path.join(output_path, f"exp_resnet_sigma_{args.sigma}")
+    os.makedirs(os.path.join(output_path, "checkpoints"), exist_ok=True)
 
     print("Training model...")
-    val_loss, val_acc = evaluate(model, val_loader, criterion, device, args.sigma)
-    print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-
     for epoch in range(args.epochs):
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, args.sigma)
+        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device, args.experiment, args.sigma)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device, args.sigma)
         lr_scheduler.step()
 
@@ -138,14 +138,18 @@ def main():
               f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         wandb.log({"epoch": epoch, "train_loss": train_loss, "train_acc": train_acc,
             "val_loss": val_loss, "val_acc": val_acc, "lr": optimizer.param_groups[0]['lr']})
+        
+        if epoch < 45 or epoch % 3 == 0:
+            torch.save(model.state_dict(), f"{output_path}/checkpoints/epoch{epoch}.pth")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), f"{dir_path}/checkpoints/best_model.pth")
-            print(f"Model saved to {dir_path}/checkpoints/best_model.pth")
+            torch.save(model.state_dict(), f"{output_path}/checkpoints/best_model.pth")
+            print(f"Model saved to {output_path}/checkpoints/best_model.pth")
 
     # Final test evaluation
-    test_loss, test_acc = evaluate(model, val_loader, criterion, device)
+    torch.save(model.state_dict(), f"{output_path}/checkpoints/final_model.pth")
+    test_loss, test_acc = evaluate(model, val_loader, criterion, device, args.sigma)
     print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%")
 
 if __name__ == "__main__":
