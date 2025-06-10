@@ -43,23 +43,17 @@ class LayerActivityExtractor:
 
         # Register hooks after each residual block (after relu) and activation before final classifier
         self.features = defaultdict(list)
-        layers_of_interest = ["layer1.0.relu", "layer1.1.relu", "layer1.2.relu",
-            "layer2.0.relu", "layer2.1.relu", "layer2.2.relu", "layer2.3.relu",
-            "layer3.0.relu", "layer3.1.relu", "layer3.2.relu", "layer3.3.relu", "layer3.4.relu", "layer3.5.relu",
-            "layer4.0.relu", "layer4.1.relu", "layer4.2.relu",
-            "avgpool"
-        ]
-        self.target_layers = self._get_layers_by_type(self.model, layers_of_interest)
+        self.target_layers = self._get_layers_by_type(self.model)
         self._register_hooks()
 
     
-    def _get_layers_by_type(self, model, target_layers):
+    def _get_layers_by_type(self, model):
         """
         Returns a dict {layer_name: layer_module} for all layers of the specified types.
         """
         layers = {}
         for name, module in model.named_modules():
-            if name in target_layers:
+            if type(module).__name__ == 'Bottleneck':
                 layers[name] = module
         return layers
 
@@ -88,5 +82,5 @@ class LayerActivityExtractor:
         activity_matrices = {}
         for name, feats in self.features.items():
             activations = torch.cat(feats, dim=0)
-            activity_matrices[name] = activations.view(activations.size(0), -1).numpy()
+            activity_matrices[name] = activations.numpy()
         return activity_matrices

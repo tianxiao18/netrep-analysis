@@ -4,6 +4,8 @@ import torchvision
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from .blur import add_fixed_blur, add_random_blur, add_random_blur_no_gray
+import numpy as np
+import torchvision.transforms.functional as TF
 
 # Loss with label smoothing
 class LabelSmoothingCrossEntropy(nn.Module):
@@ -40,6 +42,11 @@ def get_lr_scheduler(optimizer, warmup_epochs, total_epochs):
             return 0.5 * (1 + torch.cos(torch.tensor((epoch - warmup_epochs) / (total_epochs - warmup_epochs) * 3.1415926535)))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+def generate_blur_weights(sigmas, temperature=1.0):
+    temperature = 1
+    weights = np.exp(-np.array(sigmas) / temperature)
+    return (weights / weights.sum()).tolist()
+
 def train(model, dataloader, criterion, optimizer, device, blur, sigma):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
@@ -53,8 +60,10 @@ def train(model, dataloader, criterion, optimizer, device, blur, sigma):
         elif blur == "strong_random_blur":
             images = add_random_blur_no_gray(images, [0, 1, 2, 4, 8], [0.2, 0.2, 0.2, 0.2, 0.2])
         elif blur == "weak_random_blur":
-            images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], [0.6937, 0.2129, 0.0653, 0.0200, 0.0062, 0.0019])
-
+            weights = generate_blur_weights([0,1,2,3,4,5], temperature=sigma)
+            images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], weights)
+        
+        save_blur_examples(images, sigmas=[0,1,2,3,4,5])
         optimizer.zero_grad()
         outputs = model(images)
         loss = criterion(outputs, labels)
@@ -102,3 +111,40 @@ def show_images(images, title=""):
     plt.title(title)
     plt.axis("off")
     plt.savefig('check.png')
+
+
+def save_blur_examples(images, sigmas, save_path="blur_examples.png"):
+    """Save one blurred image per sigma value from the first sample in a batch."""
+
+    # Select the first image from the batch and replicate it
+    base_img = images[0].unsqueeze(0)  # shape: (1, C, H, W)
+    base_batch = base_img.repeat(len(sigmas), 1, 1, 1)
+
+    # Use uniform weights so each sigma is applied once
+    blurred_images = []
+
+    for sigma in sigmas:
+        blurred_image = add_random_blur_no_gray(base_batch, [sigma], [1.0], seed=123)
+        blurred_images.append(blurred_image)
+    blurred_images = torch.cat(blurred_images, dim=0)
+    
+    # Unnormalize for visualization
+    def unnormalize(t):
+        mean = torch.tensor([0.485, 0.456, 0.406], device=t.device).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=t.device).view(3, 1, 1)
+        return t * std + mean
+
+    blurred_images = unnormalize(blurred_images).cpu().clamp(0, 1)
+    print(blurred_images.size())
+
+    # Plot
+    plt.figure(figsize=(15, 3))
+    for i in range(len(sigmas)):
+        plt.subplot(1, len(sigmas), i + 1)
+        img = blurred_images[i]
+        plt.imshow(TF.to_pil_image(img))
+        plt.title(f"σ = {sigmas[i]}")
+        plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
