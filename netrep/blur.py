@@ -61,8 +61,6 @@ def add_random_blur_no_gray(images, sigmas, weights, seed=66):
     sampled_sigmas = np.random.choice(sigmas, size=B, p=weights)
     sampled_sigmas_tensor = torch.tensor(sampled_sigmas, dtype=torch.float32, device=device)
 
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
      # For each unique sigma, apply batch blur to matching images
     unique_sigmas = torch.unique(sampled_sigmas_tensor)
     for sigma_val in unique_sigmas:
@@ -81,14 +79,7 @@ def add_random_blur_no_gray(images, sigmas, weights, seed=66):
                 sigma=(sigma, sigma)
             )
 
-        blurred = torch.stack([normalize(img) for img in blurred])
+        # blurred = torch.stack([normalize(img) for img in blurred])
         blurred_images[indices] = blurred
-
-        # if sigma == 8:
-        #     import torchvision.utils as vutils
-        #     import os
-        #     os.makedirs("blur_debug", exist_ok=True)
-        #     vutils.save_image(image, "blur_debug/original.png")
-        #     vutils.save_image(blurred_image, "blur_debug/blurred.png")
-
+        
     return blurred_images

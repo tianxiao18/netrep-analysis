@@ -117,8 +117,7 @@ def save_blur_examples(images, sigmas, save_path="blur_examples.png"):
     """Save one blurred image per sigma value from the first sample in a batch."""
 
     # Select the first image from the batch and replicate it
-    base_img = images[0].unsqueeze(0)  # shape: (1, C, H, W)
-    base_batch = base_img.repeat(len(sigmas), 1, 1, 1)
+    base_batch = images[:5]
 
     # Use uniform weights so each sigma is applied once
     blurred_images = []
@@ -126,25 +125,16 @@ def save_blur_examples(images, sigmas, save_path="blur_examples.png"):
     for sigma in sigmas:
         blurred_image = add_random_blur_no_gray(base_batch, [sigma], [1.0], seed=123)
         blurred_images.append(blurred_image)
-    blurred_images = torch.cat(blurred_images, dim=0)
-    
-    # Unnormalize for visualization
-    def unnormalize(t):
-        mean = torch.tensor([0.485, 0.456, 0.406], device=t.device).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225], device=t.device).view(3, 1, 1)
-        return t * std + mean
-
-    blurred_images = unnormalize(blurred_images).cpu().clamp(0, 1)
-    print(blurred_images.size())
 
     # Plot
-    plt.figure(figsize=(15, 3))
+    plt.figure(figsize=(18, 15))
     for i in range(len(sigmas)):
-        plt.subplot(1, len(sigmas), i + 1)
-        img = blurred_images[i]
-        plt.imshow(TF.to_pil_image(img))
-        plt.title(f"σ = {sigmas[i]}")
-        plt.axis("off")
+        for j in range(len(base_batch)):
+            plt.subplot(len(base_batch), len(sigmas), j*len(sigmas)+i+1)
+            img = blurred_images[i][j]
+            plt.imshow(TF.to_pil_image(img))
+            plt.title(f"σ = {sigmas[i]}")
+            plt.axis("off")
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
