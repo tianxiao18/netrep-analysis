@@ -63,7 +63,7 @@ def train(model, dataloader, criterion, optimizer, device, blur, sigma):
             weights = generate_blur_weights([0,1,2,3,4,5], temperature=sigma)
             images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], weights)
         
-        save_blur_examples(images, sigmas=[0,1,2,3,4,5])
+        # save_blur_examples(images, sigmas=[0,1,2,3,4,5])
         optimizer.zero_grad()
         outputs = model(images)
         loss = criterion(outputs, labels)

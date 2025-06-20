@@ -6,11 +6,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/tmp/%x-%j.out
 
-EXPERIMENT_NAME="fixed_blur"
-SIGMA=8
+EXPERIMENT_NAME="weak_random_blur"
+SIGMA=4
 
 LOGDIR="experiments/${EXPERIMENT_NAME}/exp_resnet_sigma_${SIGMA}"
 exec > "${LOGDIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" 2>&1

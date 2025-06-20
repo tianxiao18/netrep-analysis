@@ -22,6 +22,8 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
+from adjustText import adjust_text
+import re
 
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
@@ -35,7 +37,7 @@ def parse_args():
     parser.add_argument(
         "--data_path",
         type=str,
-        default="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet/val"
+        default="/mnt/home/the10/ceph/dataset/imagenet/val"
     )
 
     parser.add_argument(
@@ -53,7 +55,7 @@ def parse_args():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=64
+        default=24
     )
 
     return parser.parse_args()
@@ -70,11 +72,11 @@ def split_activity(activities, save_path=None, n_components=1000):
         pca_activities = {}
 
         for key in activities:
-            X = activities[key].reshape(activities[key].shape[0], -1)
+            X = activities[key]
             pca = PCA(n_components=n_components)
             
-            X_pca = pca.fit_transform(X)
-            print(f"{key} variance explained: {np.sum(pca.explained_variance_ratio_):.4f}")
+            X_pca = pca.fit_transform(X.reshape(X.shape[0], -1))
+            print(f"{key} variance explained: {np.sum(pca.explained_variance_ratio_)}")
             pca_activities[key] = X_pca
             
         if save_path:
@@ -159,7 +161,17 @@ def main():
         X_train, X_test, network_names = extract_activity_all(experiment_ls, base_path)
 
     # compute procruste's distance between pair of networks
-    distmat = compute_distances(X_train, X_test)
+    if not os.path.isfile(f"{result_path}/distance_matrix.npy"):
+        distmat = compute_distances(X_train, X_test)
+    else:
+        distmat = np.load(f"{result_path}/distance_matrix.npy")
+    
+    # TODO: temporary cut off last experiments for display, fix later
+    if args.experiment == 'all':
+        n_layers = len(network_names) // len(experiment_ls)
+        distmat = distmat[:(len(experiment_ls)-1)*n_layers, :(len(experiment_ls)-1)*n_layers]
+        network_names = network_names[:(len(experiment_ls)-1)*n_layers]
+
     visualize_distance(distmat, network_names, result_path)
 
     embedding = MDS(n_components=200, metric= True, eps = 0.00001, normalized_stress='auto', dissimilarity='precomputed', random_state=42)
@@ -168,7 +180,12 @@ def main():
 
     pca = PCA(n_components=2)
     coordinates = pca.fit_transform(Z)
-    visualize_coordinates(coordinates, network_names, result_path)
+    if args.experiment == 'all':
+        visualize_coordinates_all(coordinates, network_names, result_path, experiment_ls[:-1])
+        visualize_layer_aligned(coordinates, network_names, result_path, experiment_ls[:-1], mds_dim=0)
+        visualize_layer_aligned(coordinates, network_names, result_path, experiment_ls[:-1], mds_dim=1)
+    else:
+        visualize_coordinates(coordinates, network_names, result_path)
 
     
 def visualize_distance(distmat, network_names, output_path):
@@ -201,28 +218,14 @@ def visualize_distance(distmat, network_names, output_path):
     plt.close()
 
 
-def visualize_coordinates(coords, network_names, output_path, experiments=None):
+def visualize_coordinates(coords, network_names, output_path):
     plt.figure(figsize=(10, 8))
 
-    if experiments is None:
-        plt.scatter(coords[:, 0], coords[:, 1], s=150, c=range(len(coords)))
-        plt.plot(coords[:, 0], coords[:, 1], c='black')
-        for i, name in enumerate(network_names):
-            name = '.'.join(name.split('.')[1:])
-            plt.text(coords[i, 0], coords[i, 1]+ 0.03, name, fontsize=10, ha='center', va='center')
-    else:
-        n_networks = len(network_names) // len(experiments)
-
-        for e in range(len(experiments)):
-            selected_coords = coords[e*n_networks: (e+1)*n_networks]
-            selected_network_names = network_names[e*n_networks: (e+1)*n_networks]
-
-            plt.scatter(selected_coords[:, 0], selected_coords[:, 1], s=150, c=range(len(selected_coords)))
-            plt.plot(selected_coords[:, 0], selected_coords[:, 1], c='black')
-
-            for i, name in enumerate(selected_network_names):
-                name = '.'.join(name.split('.')[1:])
-                plt.text(selected_coords[i, 0], selected_coords[i, 1]+ 0.03, name, fontsize=10, ha='center', va='center')
+    plt.scatter(coords[:, 0], coords[:, 1], s=150, c=range(len(coords)))
+    plt.plot(coords[:, 0], coords[:, 1], c='black')
+    for i, name in enumerate(network_names):
+        name = '.'.join(name.split('.')[1:])
+        plt.text(coords[i, 0], coords[i, 1]+ 0.03, name, fontsize=10, ha='center', va='center')
 
     plt.title(f"MDS Embedding")
     plt.xlabel("MDS Dimension 1")
@@ -232,6 +235,76 @@ def visualize_coordinates(coords, network_names, output_path, experiments=None):
     print(f"Saving to {output_path}/mds_embedding.png")
     plt.close()
 
+def visualize_coordinates_all(coords, network_names, output_path, experiments):
+    plt.figure(figsize=(10, 8))
+    n_networks = len(network_names) // len(experiments)
+    markers = ['o', 's', '^', 'D']
+    texts = []
+
+    for e in range(len(experiments)):
+        selected_coords = coords[e*n_networks: (e+1)*n_networks]
+        selected_network_names = network_names[e*n_networks: (e+1)*n_networks]
+
+        plt.scatter(selected_coords[:, 0], selected_coords[:, 1], s=150, c=range(len(selected_coords)), marker=markers[e])
+        plt.plot(selected_coords[:, 0], selected_coords[:, 1], color='gray', alpha=0.5, linestyle='--')
+
+        for i, name in enumerate(selected_network_names):
+            name = '.'.join(name.split('.')[1:])
+            text = plt.text(selected_coords[i, 0], selected_coords[i, 1]+ 0.03, name, fontsize=8, ha='center', va='center')
+            texts.append(text)
+
+    for net_i in range(4):
+        plt.scatter([], [], marker=markers[net_i], color='gray', label=f'T={net_i}')
+    
+    adjust_text(texts)
+    plt.title(f"MDS Embedding")
+    plt.xlabel("MDS Dimension 1")
+    plt.ylabel("MDS Dimension 2")
+    plt.colorbar()
+    plt.legend()
+    plt.savefig(f'{output_path}/mds_embedding.png')
+    print(f"Saving to {output_path}/mds_embedding.png")
+    plt.close()
+
+def visualize_layer_aligned(coords, network_names, output_path, experiments, mds_dim=1):
+    plt.figure(figsize=(15, 4))
+    n_networks = len(network_names) // len(experiments)
+    markers = ['o', 's', '^', 'D']
+    texts = []
+
+    # Extract layer index for x-axis
+    def extract_layer_id(name):
+        match = re.search(r'layer(\d+\.\d+)', name)
+        return float(match.group(1)) if match else -1
+
+    layer_ids = [extract_layer_id(name) for name in network_names]
+
+    for e in range(len(experiments)):
+        start = e * n_networks
+        end = (e + 1) * n_networks
+        selected_coords = coords[start:end]
+        selected_layer_ids = layer_ids[start:end]
+        selected_network_names = network_names[start:end]
+
+        plt.scatter(selected_layer_ids, selected_coords[:, mds_dim], s=150, c=range(len(selected_coords)), marker=markers[e], label=f'T={e}')
+
+        for i in range(n_networks):
+            x = selected_layer_ids[i]
+            y = selected_coords[i, mds_dim]
+            label = '.'.join(selected_network_names[i].split('.')[1:])
+            text = plt.text(x, y, label, fontsize=8, ha='center', va='center')
+            texts.append(text)
+
+    adjust_text(texts, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5))
+
+    plt.xlabel("Layer Index")
+    plt.ylabel("MDS Dimension")
+    plt.title(f"Layer-Aligned MDS Dim {mds_dim}")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'{output_path}/layer_aligned_mds{mds_dim}.png')
+    print(f"Saving to {output_path}/layer_aligned_mds{mds_dim}.png")
+    plt.close()
 
 if __name__ == "__main__":
     main()
