@@ -42,28 +42,15 @@ def get_lr_scheduler(optimizer, warmup_epochs, total_epochs):
             return 0.5 * (1 + torch.cos(torch.tensor((epoch - warmup_epochs) / (total_epochs - warmup_epochs) * 3.1415926535)))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-def generate_blur_weights(sigmas, temperature=1.0):
-    temperature = 1
-    weights = np.exp(-np.array(sigmas) / temperature)
-    return (weights / weights.sum()).tolist()
 
-def train(model, dataloader, criterion, optimizer, device, blur, sigma):
+def train(model, dataloader, criterion, optimizer, device):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
     pbar = tqdm(dataloader, desc="Training", leave=False)
 
     for images, labels in pbar:
         images, labels = images.to(device), labels.to(device)
-
-        if blur == "fixed_blur":
-            images = add_fixed_blur(images, sigma=sigma)
-        elif blur == "strong_random_blur":
-            images = add_random_blur_no_gray(images, [0, 1, 2, 4, 8], [0.2, 0.2, 0.2, 0.2, 0.2])
-        elif blur == "weak_random_blur":
-            weights = generate_blur_weights([0,1,2,3,4,5], temperature=sigma)
-            images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], weights)
-        
-        # save_blur_examples(images, sigmas=[0,1,2,3,4,5])
+        # show_images(images)
         optimizer.zero_grad()
         outputs = model(images)
         loss = criterion(outputs, labels)
@@ -77,15 +64,12 @@ def train(model, dataloader, criterion, optimizer, device, blur, sigma):
 
     return total_loss / total, 100.0 * correct / total
 
-def evaluate(model, dataloader, criterion, device, sigma):
+def evaluate(model, dataloader, criterion, device):
     model.eval()
     total_loss, correct, total = 0.0, 0, 0
     with torch.no_grad():
         for images, labels in dataloader:
             images, labels = images.to(device), labels.to(device)
-            # images = add_fixed_blur(images, sigma=sigma)
-            # images = add_random_blur_no_gray(images, [0, 1, 2, 3, 4, 5], [0.6937, 0.2129, 0.0653, 0.0200, 0.0062, 0.0019]) # v6 - Sigma0to5 V1
-            images = add_random_blur_no_gray(images, [0], [1])
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -113,28 +97,16 @@ def show_images(images, title=""):
     plt.savefig('check.png')
 
 
-def save_blur_examples(images, sigmas, save_path="blur_examples.png"):
+def save_blur_examples(images, save_path="blur_examples.png"):
     """Save one blurred image per sigma value from the first sample in a batch."""
-
-    # Select the first image from the batch and replicate it
     base_batch = images[:5]
 
-    # Use uniform weights so each sigma is applied once
-    blurred_images = []
-
-    for sigma in sigmas:
-        blurred_image = add_random_blur_no_gray(base_batch, [sigma], [1.0], seed=123)
-        blurred_images.append(blurred_image)
-
-    # Plot
     plt.figure(figsize=(18, 15))
-    for i in range(len(sigmas)):
-        for j in range(len(base_batch)):
-            plt.subplot(len(base_batch), len(sigmas), j*len(sigmas)+i+1)
-            img = blurred_images[i][j]
-            plt.imshow(TF.to_pil_image(img))
-            plt.title(f"σ = {sigmas[i]}")
-            plt.axis("off")
+    for i in range(len(base_batch)):
+        plt.subplot(len(base_batch), 1, i+1)
+        img = base_batch[i]
+        plt.imshow(TF.to_pil_image(img))
+        plt.axis("off")
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()

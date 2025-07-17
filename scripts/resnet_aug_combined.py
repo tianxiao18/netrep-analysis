@@ -14,8 +14,6 @@ from netrep.optimize import train, evaluate, LabelSmoothingCrossEntropy, exclude
 from netrep.augment import AugmentationPipeline
 from argparse import ArgumentParser
 from torchvision import transforms
-import random
-import numpy as np
 
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
@@ -27,16 +25,10 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--aug_type",
+        "--augments",
+        nargs="+",
         type=str,
-        default="weak_random_blur"
-    )
-
-    parser.add_argument(
-        "--aug_param",
-        type=float,
-        default=None,
-        help="params for augmentation (ex. sigma for fixed_blur, temp for random_blur, prob for sp noise)"
+        help='List of augmentations as key=val pairs, e.g., weak_random_blur=4',
     )
 
     parser.add_argument(
@@ -48,7 +40,7 @@ def parse_args():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=32
+        default=64
     )
 
     parser.add_argument(
@@ -95,26 +87,41 @@ def parse_args():
 
     return parser.parse_args()
 
-def set_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
+def parse_augments(pairs):
+    augments = {}
+    for pair in pairs:
+        key, val = pair.split("=")
+        try:
+            augments[key] = eval(val)  # tries int, float, bool, etc.
+        except:
+            augments[key] = val  # fallback to string
+    return augments
 
 def main():
     args = parse_args()
-    set_seed(42)
+    augment_config = parse_augments(args.augments)
+    print(augment_config)
+    aug_types = list(augment_config.keys())
+    aug_params = list(augment_config.values())
+
     warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
     param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", "sp_noise": "sp_prob"}
-    param_name = param_dict[args.aug_type]
 
     print("Setting up dataloader...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    config = {"crop": True, "flip": False, param_name: args.aug_param}  # crop has to be true to ensure same shape input
-    if "blur" in args.aug_type: config["blur"] = args.aug_type
+    config = {"crop": True, "flip": False}  # crop has to be true to ensure same shape input
+
+    for aug_type, aug_param in augment_config.items():
+        param_name = param_dict[aug_type]
+
+        if "blur" in aug_type:
+            config["blur"] = aug_type
+        if aug_type == "sp_noise":
+            config[param_name] = aug_param/100
+        else:
+            config[param_name] = aug_param
+
     train_tf = AugmentationPipeline(config)
     eval_tf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor()])
     print(config)
@@ -130,7 +137,7 @@ def main():
     )
     lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
     best_val_acc = 0
-    title = f"resnet_{args.aug_type}" if args.aug_param is None else f"resnet_{args.aug_type}_{param_name}{args.aug_param}"
+    title = "resnet_" + "_".join(aug_types)
 
     wandb.init(
         project="resnet-imagenet", 
@@ -142,12 +149,15 @@ def main():
             "momentum": args.momentum,
             "weight_decay": args.weight_decay,
             "label_smoothing": args.label_smoothing,
-            param_name: args.aug_param
+            **config
         }
     )
-    output_path = f"/mnt/home/the10/netrep-analysis/experiments/{args.aug_type}"
-    if args.aug_param is not None:
-        output_path = os.path.join(output_path, f"exp_resnet_{param_name}_{args.aug_param}")
+    output_path = f"/mnt/home/the10/netrep-analysis/experiments/aug_combined/{'_'.join(aug_types)}"
+    if augment_config:
+        aug_tags = [f"{param_dict[aug]}_{param}" for aug, param in zip(aug_types, aug_params)]
+        aug_suffix = "_".join(aug_tags)
+        output_path = os.path.join(output_path, f"exp_resnet_{aug_suffix}")
+        
     os.makedirs(os.path.join(output_path, "checkpoints"), exist_ok=True)
 
     print("Training model...")
@@ -171,7 +181,7 @@ def main():
 
     # Final test evaluation
     torch.save(model.state_dict(), f"{output_path}/checkpoints/final_model.pth")
-    test_loss, test_acc = evaluate(model, val_loader, criterion, device)
+    test_loss, test_acc = evaluate(model, val_loader, criterion, device, args.sigma)
     print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%")
 
 if __name__ == "__main__":

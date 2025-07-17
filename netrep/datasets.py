@@ -21,7 +21,7 @@ def get_transforms():
     ])
     return train_transform, eval_transform
 
-def get_dataloaders(data_dir, batch_size, num_workers, val_ratio=0.1, seed=42):
+def get_dataloaders(data_dir, batch_size, num_workers, train_tf, eval_tf):
     # train_dataset, val_dataset = get_split_datasets(
     #     train_dir="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet/train",
     #     val_ratio=val_ratio,
@@ -29,7 +29,6 @@ def get_dataloaders(data_dir, batch_size, num_workers, val_ratio=0.1, seed=42):
     #     train_transform=train_tf,
     #     val_transform=eval_tf
     # )
-    train_tf, eval_tf = get_transforms()
     train_dataset = datasets.ImageFolder(os.path.join(data_dir, "train"), train_tf)
     val_dataset = datasets.ImageFolder(os.path.join(data_dir, "val"), eval_tf)
 

@@ -58,6 +58,12 @@ def parse_args():
         default=24
     )
 
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="best_model"
+    )
+
     return parser.parse_args()
 
 def split_activity(activities, save_path=None, n_components=1000):
@@ -130,16 +136,20 @@ def main():
     base_path = '/mnt/home/the10/netrep-analysis'
     output_path = f'{base_path}/experiments/{args.experiment}'
     result_path = f'{output_path}/results'
+    result_path = f'{result_path}/{args.model}' if args.model != 'best_model' else result_path
     embed_path = f'{result_path}/activities.npz'
 
     os.makedirs(result_path, exist_ok=True)
-    experiment_ls = ['clean', 'weak_random_blur/exp_resnet_sigma_1', 'weak_random_blur/exp_resnet_sigma_2',
-                     'weak_random_blur/exp_resnet_sigma_3', 'weak_random_blur/exp_resnet_sigma_4']
+    # experiment_ls = ['clean', 'weak_random_blur/exp_resnet_sigma_1', 'weak_random_blur/exp_resnet_sigma_2',
+    #                  'weak_random_blur/exp_resnet_sigma_3', 'weak_random_blur/exp_resnet_sigma_4']
+    # experiment_ls = ['clean', 'sp_noise/exp_resnet_sp_prob_2', 'sp_noise/exp_resnet_sp_prob_4','sp_noise/exp_resnet_sp_prob_8']
+    experiment_ls = ['clean', 'weak_random_blur/exp_resnet_temp_0.2', 'weak_random_blur/exp_resnet_temp_0.4', 'weak_random_blur/exp_resnet_temp_0.6','weak_random_blur/exp_resnet_temp_0.8',
+                      'weak_random_blur/exp_resnet_sigma_1', 'weak_random_blur/exp_resnet_sigma_2', 'weak_random_blur/exp_resnet_sigma_3']
 
     # extract activity for each layer in the network
-    if args.experiment != 'all':
+    if 'all' not in args.experiment:
         extractor = LayerActivityExtractor(
-            checkpoint_path=f'{output_path}/checkpoints/best_model.pth',
+            checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
             image_folder=args.data_path,
             batch_size=args.batch_size, 
             num_workers=args.num_workers,
@@ -166,11 +176,12 @@ def main():
     else:
         distmat = np.load(f"{result_path}/distance_matrix.npy")
     
-    # TODO: temporary cut off last experiments for display, fix later
-    if args.experiment == 'all':
-        n_layers = len(network_names) // len(experiment_ls)
-        distmat = distmat[:(len(experiment_ls)-1)*n_layers, :(len(experiment_ls)-1)*n_layers]
-        network_names = network_names[:(len(experiment_ls)-1)*n_layers]
+    # TODO: temporary cut off first experiments for display, fix later
+    # if 'all' in args.experiment:
+    #     n_layers = len(network_names) // len(experiment_ls)
+    #     distmat = distmat[n_layers:, n_layers:]
+    #     network_names = network_names[n_layers:]
+    #     experiment_ls = experiment_ls[1:]
 
     visualize_distance(distmat, network_names, result_path)
 
@@ -180,10 +191,11 @@ def main():
 
     pca = PCA(n_components=2)
     coordinates = pca.fit_transform(Z)
-    if args.experiment == 'all':
-        visualize_coordinates_all(coordinates, network_names, result_path, experiment_ls[:-1])
-        visualize_layer_aligned(coordinates, network_names, result_path, experiment_ls[:-1], mds_dim=0)
-        visualize_layer_aligned(coordinates, network_names, result_path, experiment_ls[:-1], mds_dim=1)
+    if 'all' in args.experiment:
+        print(result_path)
+        visualize_coordinates_all(coordinates, network_names, result_path, experiment_ls)
+        visualize_layer_aligned(coordinates, network_names, result_path, experiment_ls, mds_dim=0)
+        visualize_layer_aligned(coordinates, network_names, result_path, experiment_ls, mds_dim=1)
     else:
         visualize_coordinates(coordinates, network_names, result_path)
 
@@ -238,7 +250,7 @@ def visualize_coordinates(coords, network_names, output_path):
 def visualize_coordinates_all(coords, network_names, output_path, experiments):
     plt.figure(figsize=(10, 8))
     n_networks = len(network_names) // len(experiments)
-    markers = ['o', 's', '^', 'D']
+    markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
     texts = []
 
     for e in range(len(experiments)):
@@ -253,7 +265,7 @@ def visualize_coordinates_all(coords, network_names, output_path, experiments):
             text = plt.text(selected_coords[i, 0], selected_coords[i, 1]+ 0.03, name, fontsize=8, ha='center', va='center')
             texts.append(text)
 
-    for net_i in range(4):
+    for net_i in range(len(experiments)):
         plt.scatter([], [], marker=markers[net_i], color='gray', label=f'T={net_i}')
     
     adjust_text(texts)
@@ -269,7 +281,7 @@ def visualize_coordinates_all(coords, network_names, output_path, experiments):
 def visualize_layer_aligned(coords, network_names, output_path, experiments, mds_dim=1):
     plt.figure(figsize=(15, 4))
     n_networks = len(network_names) // len(experiments)
-    markers = ['o', 's', '^', 'D']
+    markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
     texts = []
 
     # Extract layer index for x-axis
