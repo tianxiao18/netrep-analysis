@@ -37,7 +37,14 @@ class LayerActivityExtractor:
         ])
         self.dataset = datasets.ImageFolder(image_folder, transform=self.transform)
         labels = [sample[1] for sample in self.dataset.imgs]
-        _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, stratify=labels, random_state=42)
+
+        if test_size >= len(np.unique(labels)) and test_size < len(labels):
+            _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, stratify=labels, random_state=42)
+        elif test_size < len(np.unique(labels)):
+            _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, random_state=42)
+        else:
+            stratified_indices = np.arange(len(self.dataset))
+
         stratified_dataset = Subset(self.dataset, stratified_indices)
         self.dataloader = DataLoader(stratified_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
 

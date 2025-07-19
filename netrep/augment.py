@@ -20,16 +20,27 @@ class AugmentationPipeline:
 
         self.transforms = []
 
+        # original imagenet config
         if self.config.get("crop", False):
             self.transforms.append(T.RandomResizedCrop(224))
 
         if self.config.get("flip", False):
             self.transforms.append(T.RandomHorizontalFlip(p=1.0))
 
+        # Geometric: Random affine transform
+        if config.get("affine", False):
+            self.transforms.append(T.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1)))
+
+        # Photometric: Color jitter
+        if config.get("color_jitter", False):
+            self.transforms.append(T.ColorJitter(
+                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1))
+
         self.to_tensor = T.ToTensor()
         self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
         
+        # Noise: Random blurring & salt and pepper noise
         self.blur_mode = config.get("blur", None)
         self.blur_handlers = {
             "fixed_blur": self._apply_fixed_blur,
@@ -39,6 +50,9 @@ class AugmentationPipeline:
 
         self.sp_noise_prob = config.get("sp_prob", None)
 
+        # Occlusion: Cutout
+        self.cutout_patch_size = config.get("cutout_patch_size", None)
+
 
     def __call__(self, img):
         # Apply PIL-based transforms first
@@ -47,15 +61,21 @@ class AugmentationPipeline:
 
         img = self.to_tensor(img)
 
-        # Apply blur after tensor conversion
+        # Blur (noise/blur category)
         if self.blur_mode in self.blur_handlers:
             img = self.blur_handlers[self.blur_mode](img)
 
+        # Salt & Pepper noise (optional extra)
         if self.sp_noise_prob:
             img = self.add_salt_and_pepper_noise(img, prob=self.sp_noise_prob)
 
+        # Cutout (occlusion)
+        if self.cutout_patch_size:
+            img = self.random_cutout(img, patch_size=int(self.cutout_patch_size))
+
         return self.normalize(img)
     
+    # --- Blur methods ---
     def _apply_fixed_blur(self, img):
         sigma = self.config.get("sigma", None)
         return add_fixed_blur(img, sigma=sigma)
@@ -68,6 +88,7 @@ class AugmentationPipeline:
         weights = generate_blur_weights([0, 1, 2, 3, 4, 5], temperature=temp)
         return add_random_blur_no_gray(img, [0, 1, 2, 3, 4, 5], weights)
 
+    # --- Noise ---
     def add_salt_and_pepper_noise(self, img, prob=0.01):
         """
         img: Tensor (C x H x W), values in [0, 1]
@@ -82,3 +103,18 @@ class AugmentationPipeline:
         noisy[salt_mask] = 1.0
         noisy[pepper_mask] = 0.0
         return noisy
+
+    # --- Occlusion ---
+    def random_cutout(self, img, patch_size):
+        _, h, w = img.shape
+
+        cy = torch.randint(0, h, (1,)).item()
+        cx = torch.randint(0, w, (1,)).item()
+
+        y1 = max(cy - patch_size // 2, 0)
+        y2 = min(cy + patch_size // 2, h)
+        x1 = max(cx - patch_size // 2, 0)
+        x2 = min(cx + patch_size // 2, w)
+
+        img[:, y1:y2, x1:x2] = 0.0
+        return img

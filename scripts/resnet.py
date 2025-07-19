@@ -107,7 +107,8 @@ def main():
     args = parse_args()
     set_seed(42)
     warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
-    param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", "sp_noise": "sp_prob"}
+    param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
+                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size"}
     param_name = param_dict[args.aug_type]
 
     print("Setting up dataloader...")

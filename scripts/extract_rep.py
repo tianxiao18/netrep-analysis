@@ -24,13 +24,14 @@ import seaborn as sns
 from tqdm import tqdm
 from adjustText import adjust_text
 import re
+import random
 
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
     parser.add_argument(
         "--test_size",
         type=int,
-        default=1000,
+        default=10000,
         help="Number of test images to extract representation"
     )
 
@@ -66,32 +67,36 @@ def parse_args():
 
     return parser.parse_args()
 
-def split_activity(activities, save_path=None, n_components=1000):
+def split_activity(activities, save_path=None, n_components=1000, test_size=0.2):
     X_train, X_test = [], []
 
-    if save_path and os.path.isfile(save_path):
-        print(f"Loading PCA-reduced activities from {save_path}")
-        pca_activities = np.load(save_path)
+    # if save_path and os.path.isfile(save_path):
+    #     print(f"Loading PCA-reduced activities from {save_path}")
+    #     pca_activities = np.load(save_path)
 
-    else:
-        print("Computing PCA-reduced activities...")
-        pca_activities = {}
+    # else:
+    print("Computing PCA-reduced activities...")
+    pca_activities = {}
 
-        for key in activities:
-            X = activities[key]
-            pca = PCA(n_components=n_components)
+    for key in activities:
+        X = activities[key]
+        print(X.shape)
+        n_components = min(len(X), n_components)
+        pca = PCA(n_components=n_components)
+        X_pca = pca.fit_transform(X.reshape(X.shape[0], -1))
+        print(f"{key} variance explained in {n_components} dim: {np.sum(pca.explained_variance_ratio_)}")
+        pca_activities[key] = X_pca
             
-            X_pca = pca.fit_transform(X.reshape(X.shape[0], -1))
-            print(f"{key} variance explained: {np.sum(pca.explained_variance_ratio_)}")
-            pca_activities[key] = X_pca
-            
-        if save_path:
-            np.savez_compressed(save_path, **pca_activities)
-            print(f"Saved PCA activities to {save_path}")
+        # if save_path:
+        #     np.savez_compressed(save_path, **pca_activities)
+        #     print(f"Saved PCA activities to {save_path}")
 
     for key in pca_activities:
         X_pca = pca_activities[key]
-        X1_train, X1_test = train_test_split(X_pca, test_size=0.2, random_state=42)
+        if test_size > 0:
+            X1_train, X1_test = train_test_split(X_pca, test_size=test_size, random_state=42)
+        else:
+            X1_train, X1_test = X_pca, []
         X_train.append(X1_train)
         X_test.append(X1_test)
 
@@ -112,39 +117,161 @@ def compute_distances(X_train, X_test):
     distmat += distmat.T
     return distmat
 
-def extract_activity_all(experiment_ls, base_path):
+def distance_vs_sample_size(args, output_path):
+    sample_sizes = [100, 200, 500, 1000, 5000, 10000, 15000]
+    random_seeds = [42, 43, 44, 45, 46]
+    all_distances = []
+
+    for test_size in sample_sizes:
+        distances = []
+
+        for seed in random_seeds:
+            print(f"Computing Procruste's distance of test size {test_size} at seed {seed}")
+            set_seed(seed)
+            extractor = LayerActivityExtractor(
+                    checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
+                    image_folder=args.data_path,
+                    batch_size=args.batch_size, 
+                    num_workers=args.num_workers,
+                    test_size=test_size
+            )
+
+            activities = extractor.get_activities()
+            X_train, _ = split_activity(activities, test_size=0)
+            # network_names = activities.keys()
+
+            distmat = compute_distances(X_train, X_train)
+            print(distmat)
+            # visualize_distance(distmat, network_names, result_path)
+            distances.append(distmat)
+
+        all_distances.append(distances)
+    
+    all_distances = np.array(all_distances)
+    np.save(f'{output_path}/distance_matrix_all.npy', all_distances)
+
+    # plt.plot(sample_sizes, distances)
+    # plt.savefig('distance_vs_sample_size.png')
+
+def pc_vs_sample_size(args, output_path):
+    n_pcs = [10, 20, 50, 100, 200, 500, 1000]
+    random_seeds = [42, 43, 44, 45, 46]
+    all_distances = []
+
+    for n_pc in n_pcs:
+        distances = []
+
+        for seed in random_seeds:
+            print(f"Computing Procruste's distance of pc dim {n_pc} at seed {seed}")
+            set_seed(seed)
+            extractor = LayerActivityExtractor(
+                    checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
+                    image_folder=args.data_path,
+                    batch_size=args.batch_size, 
+                    num_workers=args.num_workers,
+                    test_size=10000
+            )
+
+            activities = extractor.get_activities()
+            X_train, _ = split_activity(activities, n_components=n_pc, test_size=0)
+            print(np.array(X_train).shape)
+            # network_names = activities.keys()
+
+            distmat = compute_distances(X_train, X_train)
+            print(distmat)
+            # visualize_distance(distmat, network_names, result_path)
+            distances.append(distmat)
+
+        all_distances.append(distances)
+    
+    all_distances = np.array(all_distances)
+    np.save(f'{output_path}/distance_matrix_pc_all.npy', all_distances)
+
+def visualize_distance_matrices(dist_matrix_path, sample_sizes, seeds, i=0, j=1):
+    all_distances = np.load(dist_matrix_path)
+    n_sample_sizes, n_seeds, n_networks, _ = all_distances.shape
+    print(all_distances.shape)
+    means = []
+    stds = []
+
+    for s in range(n_sample_sizes):
+        values = [all_distances[s, seed, i, j] for seed in range(n_seeds)]
+        means.append(np.mean(values))
+        stds.append(np.std(values))
+
+    # Plot
+    plt.figure(figsize=(6, 5))
+    plt.xscale('log')
+    plt.errorbar(sample_sizes, means, yerr=stds, fmt='-o', capsize=4)
+    plt.xlim(min(sample_sizes) * 0.9, max(sample_sizes) * 1.1)
+    plt.xlabel("Sample Size (log N)")
+    plt.ylabel(f"Distance[{i}, {j}]")
+    plt.title(f"Procrustes Distance between Layer {i} and {j}")
+    plt.tight_layout()
+    plt.savefig('p_vs_n.png')
+
+    fig, axes = plt.subplots(n_seeds, n_sample_sizes, figsize=(4 * n_sample_sizes, 4 * n_seeds))
+
+    for r_idx in range(n_seeds):
+        for s_idx in range(n_sample_sizes):
+            ax = axes[r_idx, s_idx]
+            sns.heatmap(all_distances[s_idx, r_idx], ax=ax, cmap="viridis", square=True, cbar=False)
+            ax.set_title(f"N={sample_sizes[s_idx]}, Seed={seeds[r_idx]}")
+            ax.set_xlabel("Net")
+            ax.set_ylabel("Net")
+
+    plt.tight_layout()
+    plt.savefig('dist_pca_heatmaps.png')
+
+def extract_activity_all(experiment_ls, base_path, args):
     X_train_all, X_test_all, network_names_all = [], [], []
+
+    # extract network names, assuming all experiments has the same network names
+    activities = LayerActivityExtractor(checkpoint_path=f'{base_path}/experiments/{experiment_ls[0]}/checkpoints/best_model.pth',
+        image_folder=args.data_path,batch_size=args.batch_size, num_workers=args.num_workers,test_size=args.test_size
+    ).get_activities()
+    network_names = activities.keys()
 
     for exp in experiment_ls:
         output_path = f'{base_path}/experiments/{exp}'
-        embed_path = f'{output_path}/results/activities.npz'
         save_path = f'{output_path}/results/activities_pca.npz'
 
         print(f"Loading network representation from {exp}...")
-        activities = np.load(embed_path)
         
-        X_train, X_test = split_activity(activities, save_path, n_components=1000)
+        X_train, X_test = split_activity(None, save_path, n_components=1000, test_size=0)
         X_train_all.extend(X_train)
         X_test_all.extend(X_test)
-        network_names_all.extend(activities.keys())
+        network_names_all.extend(network_names)
 
     return X_train_all, X_test_all, network_names_all
 
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 def main():
     args = parse_args()
+    set_seed(42)
 
-    base_path = '/mnt/home/the10/netrep-analysis'
+    base_path = '/mnt/home/the10/ceph/results/netrep'
     output_path = f'{base_path}/experiments/{args.experiment}'
     result_path = f'{output_path}/results'
     result_path = f'{result_path}/{args.model}' if args.model != 'best_model' else result_path
     embed_path = f'{result_path}/activities.npz'
 
     os.makedirs(result_path, exist_ok=True)
-    # experiment_ls = ['clean', 'weak_random_blur/exp_resnet_sigma_1', 'weak_random_blur/exp_resnet_sigma_2',
-    #                  'weak_random_blur/exp_resnet_sigma_3', 'weak_random_blur/exp_resnet_sigma_4']
-    # experiment_ls = ['clean', 'sp_noise/exp_resnet_sp_prob_2', 'sp_noise/exp_resnet_sp_prob_4','sp_noise/exp_resnet_sp_prob_8']
-    experiment_ls = ['clean', 'weak_random_blur/exp_resnet_temp_0.2', 'weak_random_blur/exp_resnet_temp_0.4', 'weak_random_blur/exp_resnet_temp_0.6','weak_random_blur/exp_resnet_temp_0.8',
-                      'weak_random_blur/exp_resnet_sigma_1', 'weak_random_blur/exp_resnet_sigma_2', 'weak_random_blur/exp_resnet_sigma_3']
+    # experiment_ls = ['clean', 'weak_random_blur/exp_resnet_temp_1.0', 'weak_random_blur/exp_resnet_temp_2.0', 'weak_random_blur/exp_resnet_temp_3.0', 'weak_random_blur/exp_resnet_temp_4.0',
+    #                  'sp_noise/exp_resnet_sp_prob_2', 'sp_noise/exp_resnet_sp_prob_4','sp_noise/exp_resnet_sp_prob_8']
+    # epochs = [0, 10, 20, 30, 40, 60, 69, 78, 87]
+    # experiment_ls = [f'weak_random_blur/exp_resnet_sigma_1/results/epoch{epoch}' for epoch in epochs]
+    experiment_ls = ['weak_random_blur/exp_resnet_temp_1.0', 'weak_random_blur/exp_resnet_temp_2.0', 'weak_random_blur/exp_resnet_temp_3.0', 'weak_random_blur/exp_resnet_temp_4.0']
+
+    distance_vs_sample_size(args, output_path)
+    # dist_matrix_path = "/mnt/home/the10/ceph/results/netrep/experiments/clean/distance_matrix_pc_all.npy"
+    # visualize_distance_matrices(dist_matrix_path, sample_sizes=[10, 20, 50, 100, 200, 500, 1000], seeds=[12, 13, 14])
 
     # extract activity for each layer in the network
     if 'all' not in args.experiment:
@@ -159,20 +286,32 @@ def main():
         if not os.path.isfile(embed_path):
             print("Extracting network representation...")
             activities = extractor.get_activities()
-            np.savez_compressed(embed_path, **activities)
+            # np.savez_compressed(embed_path, **activities)
         else:
             print("Loading network representation...")
             activities = np.load(embed_path)
 
-        X_train, X_test = split_activity(activities, save_path=f'{result_path}/activities_pca.npz', n_components=1000)
+        X_train, X_test = split_activity(activities, save_path=f'{result_path}/activities_pca.npz', test_size=0)
         network_names = activities.keys()
+
+        net = activities["module.layer4.2"]
+        pca = PCA().fit(net.reshape(net.shape[0], -1))
+        cumulative_variance = np.cumsum(pca.explained_variance_ratio_)
+
+        plt.plot(cumulative_variance)
+        plt.axhline(y=0.95, color='r', linestyle='--')
+        plt.xlabel('# of components')
+        plt.ylabel('Cumulative explained variance')
+        plt.grid(True)
+        plt.savefig(f'{args.test_size}_pca.png')
+        exit()
     # extract activity for all networks
     else:
-        X_train, X_test, network_names = extract_activity_all(experiment_ls, base_path)
+        X_train, X_test, network_names = extract_activity_all(experiment_ls, base_path, args)
 
     # compute procruste's distance between pair of networks
     if not os.path.isfile(f"{result_path}/distance_matrix.npy"):
-        distmat = compute_distances(X_train, X_test)
+        distmat = compute_distances(X_train, X_train)
     else:
         distmat = np.load(f"{result_path}/distance_matrix.npy")
     
