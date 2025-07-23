@@ -13,7 +13,7 @@ import numpy as np
 
 class LayerActivityExtractor:
     def __init__(self, checkpoint_path, image_folder, batch_size=256, 
-                num_workers=32, device='cuda', test_size=1000):
+                num_workers=32, device='cuda', test_size=1000, seed=42):
         self.checkpoint_path = checkpoint_path
         self.image_folder = image_folder
         self.batch_size = batch_size
@@ -23,7 +23,7 @@ class LayerActivityExtractor:
         # Load model
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
         
-        self.model = get_model(device)
+        self.model = get_model(self.device)
         self.model.load_state_dict(checkpoint)
         self.model.eval().to(self.device)
 
@@ -39,9 +39,9 @@ class LayerActivityExtractor:
         labels = [sample[1] for sample in self.dataset.imgs]
 
         if test_size >= len(np.unique(labels)) and test_size < len(labels):
-            _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, stratify=labels, random_state=42)
+            _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, stratify=labels, random_state=seed)
         elif test_size < len(np.unique(labels)):
-            _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, random_state=42)
+            _, stratified_indices = train_test_split(np.arange(len(self.dataset)), test_size=test_size, random_state=seed)
         else:
             stratified_indices = np.arange(len(self.dataset))
 
