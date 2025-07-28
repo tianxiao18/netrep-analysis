@@ -8,10 +8,12 @@
 #SBATCH --time=36:00:00
 #SBATCH --output=/tmp/%x-%j.out
 
-AUG_TYPE="weak_random_blur"
-AUG_PARAM=1.0
+AUG_TYPE="cutout"
+AUG_PARAM=120.0
 
-LOGDIR="experiments/${AUG_TYPE}/exp_resnet_temp_${AUG_PARAM}"
+declare -A param_map=(["fixed_blur"]="sigma",["weak_random_blur"]="temp",["sp_noise"]="sp_prob", ["cutout"]="cutout_patch_size")
+                  
+LOGDIR="/mnt/home/the10/ceph/results/netrep/experiments/${AUG_TYPE}/exp_resnet_${param_map[$AUG_TYPE]}_${AUG_PARAM}"
 mkdir -p "$LOGDIR"
 exec > "${LOGDIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" 2>&1
 
