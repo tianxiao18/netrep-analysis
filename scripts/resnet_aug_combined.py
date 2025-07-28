@@ -105,7 +105,7 @@ def main():
     aug_params = list(augment_config.values())
 
     warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
-    param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", "sp_noise": "sp_prob"}
+    param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", "sp_noise": "sp_prob","cutout": "cutout_patch_size"}
 
     print("Setting up dataloader...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -152,7 +152,7 @@ def main():
             **config
         }
     )
-    output_path = f"/mnt/home/the10/netrep-analysis/experiments/aug_combined/{'_'.join(aug_types)}"
+    output_path = f"/mnt/home/the10/ceph/results/netrep/experiments/aug_combined/{'_'.join(aug_types)}"
     if augment_config:
         aug_tags = [f"{param_dict[aug]}_{param}" for aug, param in zip(aug_types, aug_params)]
         aug_suffix = "_".join(aug_tags)
