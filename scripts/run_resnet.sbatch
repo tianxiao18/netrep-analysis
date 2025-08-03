@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=resnet-train
 #SBATCH --partition=eval
+#SBATCH --nodelist=workergpu[313-317]
 #SBATCH --gpus=4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -9,7 +10,7 @@
 #SBATCH --output=/tmp/%x-%j.out
 
 AUG_TYPE="cutout"
-AUG_PARAM=120.0
+AUG_PARAM=80.0
 
 declare -A param_map=(["fixed_blur"]="sigma",["weak_random_blur"]="temp",["sp_noise"]="sp_prob", ["cutout"]="cutout_patch_size")
                   
@@ -18,10 +19,10 @@ mkdir -p "$LOGDIR"
 exec > "${LOGDIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" 2>&1
 
 # copy the files
-bash scripts/download_imagenet.sh
+# bash scripts/download_imagenet.sh
 
 # Activate virtualenv
 source ~/netrep-analysis/venv/bin/activate
 
 # Run your script
-python scripts/resnet.py --aug_type=${AUG_TYPE} --aug_param=${AUG_PARAM} --data_path=/tmp/imagenet
+python scripts/resnet.py --aug_type=${AUG_TYPE} --aug_param=${AUG_PARAM}

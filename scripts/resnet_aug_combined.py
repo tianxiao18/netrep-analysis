@@ -181,7 +181,7 @@ def main():
 
     # Final test evaluation
     torch.save(model.state_dict(), f"{output_path}/checkpoints/final_model.pth")
-    test_loss, test_acc = evaluate(model, val_loader, criterion, device, args.sigma)
+    test_loss, test_acc = evaluate(model, val_loader, criterion, device)
     print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%")
 
 if __name__ == "__main__":
