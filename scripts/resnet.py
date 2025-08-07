@@ -93,6 +93,12 @@ def parse_args():
         help="Warmup epochs (used if batch >= 512)"
     )
 
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="resnet"
+    )
+
     return parser.parse_args()
 
 def set_seed(seed=42):
@@ -105,10 +111,10 @@ def set_seed(seed=42):
 
 def main():
     args = parse_args()
-    set_seed(42)
+    set_seed(43)
     warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
     param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
-                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size"}
+                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean"}
     param_name = param_dict[args.aug_type]
 
     print("Setting up dataloader...")
@@ -121,7 +127,7 @@ def main():
     print(config)
 
     train_loader, val_loader = get_dataloaders(args.data_path, args.batch_size, args.num_workers, train_tf, eval_tf)
-    model = get_model(device)
+    model = get_model(device, model_name=args.model)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
     optimizer = optim.SGD(
@@ -131,10 +137,10 @@ def main():
     )
     lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
     best_val_acc = 0
-    title = f"resnet_{args.aug_type}" if args.aug_param is None else f"resnet_{args.aug_type}_{param_name}{args.aug_param}"
+    title = f"{args.model}_{args.aug_type}" if args.aug_param is None else f"{args.model}_{args.aug_type}_{param_name}{args.aug_param}"
 
     wandb.init(
-        project="resnet-imagenet", 
+        project=f"{args.model}-imagenet", 
         name=title,          
         config={                             
             "epochs": args.epochs,
@@ -146,9 +152,9 @@ def main():
             param_name: args.aug_param
         }
     )
-    output_path = f"/mnt/home/the10/netrep-analysis/experiments/{args.aug_type}"
+    output_path = f"/mnt/home/the10/ceph/results/netrep/experiments/{args.aug_type}"
     if args.aug_param is not None:
-        output_path = os.path.join(output_path, f"exp_resnet_{param_name}_{args.aug_param}")
+        output_path = os.path.join(output_path, f"exp_{args.model}_{param_name}_{args.aug_param}")
     os.makedirs(os.path.join(output_path, "checkpoints"), exist_ok=True)
 
     print("Training model...")

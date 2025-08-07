@@ -12,7 +12,7 @@ sys.path.insert(0, project_root)
 from netrep.metrics import LinearMetric
 from netrep.activity_extractor import LayerActivityExtractor
 from netrep.dualPCA import DualPCA
-from netrep.visualize import visualize_coordinates_all, visualize_coordinates, visualize_distance, visualize_layer_aligned
+from netrep.visualize import visualize_coordinates_all, visualize_coordinates, visualize_distance, visualize_layer_aligned, visualize_distance_matrices
 from argparse import ArgumentParser
 
 from sklearn.model_selection import train_test_split
@@ -233,7 +233,10 @@ def exp_to_name(exp_ls):
     symbol_map = {'temp': 'T', 'cutout_patch_size': 'C'}
 
     for exp in exp_ls:        
-        if exp != 'clean':
+        if len(exp) > 50:
+            symbol = 'combined'
+            param = '0'
+        elif exp != 'clean':
             words = exp.split('/')[-1].split('_')
             symbol = symbol_map['_'.join(words[2:-1])]
             param = words[-1]
@@ -261,7 +264,7 @@ def main():
     embed_path = f'{result_path}/activities.npz'
 
     os.makedirs(result_path, exist_ok=True)
-    experiment_ls = ['clean',  'cutout/exp_resnet_cutout_patch_size_60.0', 'cutout/exp_resnet_cutout_patch_size_80.0','cutout/exp_resnet_cutout_patch_size_100.0', 'cutout/exp_resnet_cutout_patch_size_120.0']
+    experiment_ls = ['weak_random_blur/exp_resnet_temp_1.0', 'cutout/exp_resnet_cutout_patch_size_60.0', 'aug_combined/weak_random_blur_cutout/exp_resnet_temp_1.0_cutout_patch_size_60.0']
 
     # distance_vs_sample_size(args, output_path)
     # dist_matrix_path = "/mnt/home/the10/ceph/results/netrep/experiments/clean/distance_matrix_pc_all.npy"
@@ -276,7 +279,7 @@ def main():
             num_workers=args.num_workers,
             test_size=args.test_size
         )
-            
+
         # if not os.path.isfile(embed_path):
         print("Extracting network representation...")
         activities = extractor.get_activities()
@@ -296,6 +299,7 @@ def main():
     print(np.array(X_train).shape)
     if not os.path.isfile(f"{result_path}/distance_matrix.npy"):
         distmat = compute_distances(X_train, X_train)
+        np.save(f'{result_path}/distance_matrix.npy', distmat)
     else:
         distmat = np.load(f"{result_path}/distance_matrix.npy")
     

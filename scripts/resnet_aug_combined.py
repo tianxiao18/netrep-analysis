@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=64
+        default=72
     )
 
     parser.add_argument(
