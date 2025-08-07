@@ -9,7 +9,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --output=/tmp/%x-%j.out
                   
-LOGDIR="/mnt/home/the10/ceph/results/netrep/experiments/aug_combined/weak_random_blur_cutout/exp_resnet_temp_4.0_cutout_patch_size_120.0"
+LOGDIR="/mnt/home/the10/ceph/results/netrep/experiments/aug_combined/weak_random_blur_cutout/exp_resnet_temp_2.0_cutout_patch_size_80.0"
 mkdir -p "$LOGDIR"
 exec > "${LOGDIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" 2>&1
 
@@ -20,4 +20,4 @@ exec > "${LOGDIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" 2>&1
 source ~/netrep-analysis/venv/bin/activate
 
 # Run your script
-python scripts/resnet_aug_combined.py --augments weak_random_blur=4.0 cutout=120.0
+python scripts/resnet_aug_combined.py --augments weak_random_blur=2.0 cutout=80.0
