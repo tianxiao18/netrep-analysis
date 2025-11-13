@@ -8,13 +8,19 @@ import re
 import random
 import gc
 import math
+from netrep.augment import AugmentationPipeline
+from netrep.datasets import get_cifar_dataloaders, get_dataloaders
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import torchvision
+import os
 
-def visualize_distance(distmat, network_names, output_path):
+def visualize_distance(distmat, network_names, output_path, off_diagonal_color=True):
     distmat = np.array(distmat)
     mask = np.eye(distmat.shape[0], dtype=bool)
 
     # Get vmin and vmax from off-diagonal entries only
-    off_diag_vals = distmat[~mask]
+    off_diag_vals = distmat[~mask] if off_diagonal_color else distmat
     vmin = off_diag_vals.min()
     vmax = off_diag_vals.max()
 
@@ -71,7 +77,8 @@ def visualize_coordinates(coords, network_names, output_path):
 def visualize_coordinates_all(coords, network_names, output_path, experiments):
     plt.figure(figsize=(10, 8))
     n_networks = len(network_names) // len(experiments)
-    markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
+    base_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
+    markers = (base_markers * ((len(experiments) // len(base_markers)) + 1))[:len(experiments)]
     texts = []
 
     for e in range(len(experiments)):
@@ -101,7 +108,8 @@ def visualize_coordinates_all(coords, network_names, output_path, experiments):
 def visualize_layer_aligned(coords, network_names, output_path, experiments, mds_dim=1):
     plt.figure(figsize=(15, 4))
     n_networks = len(network_names) // len(experiments)
-    markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
+    base_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
+    markers = (base_markers * ((len(experiments) // len(base_markers)) + 1))[:len(experiments)]
     texts = []
 
     # Extract layer index for x-axis
@@ -186,4 +194,90 @@ def visualize_distance_matrices(dist_matrix_path, sample_sizes, seeds, i=0, j=1)
     plt.tight_layout()
     plt.subplots_adjust(top=0.87)
     plt.savefig('dist_pca_heatmaps.png')
+
+def show_cifar_images(cutout_sizes, sigmas, config, args, device):
+    n_rows = len(cutout_sizes)
+    n_cols = len(sigmas)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3 * n_cols, 3 * n_rows))
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
+
+    normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+                                     std=[0.2023, 0.1994, 0.2010])
+    inv_normalize = transforms.Normalize(
+        mean=[-m/s for m, s in zip([0.4914, 0.4822, 0.4465],
+                                   [0.2023, 0.1994, 0.2010])],
+        std=[1/s for s in [0.2023, 0.1994, 0.2010]]
+    )
+
+    base_loader, _ = get_cifar_dataloaders(
+        args.data_path, args.batch_size, args.num_workers,
+        transforms.ToTensor(), transforms.ToTensor()
+    )
+    base_images, _ = next(iter(base_loader))
+    base_image = base_images[1].unsqueeze(0).to(device)
+
+    for i, c in enumerate(cutout_sizes):
+        for j, s in enumerate(sigmas):
+            config.update({"cutout_patch_size": c, "sigma": s})
+            train_tf = AugmentationPipeline(config)
+
+            img_aug = train_tf(base_image.squeeze(0).clone())
+            img = inv_normalize(img_aug.squeeze(0)).clamp(0, 1)
+
+            ax = axes[i, j] if n_rows > 1 else axes[j]
+            ax.imshow(img.cpu().permute(1, 2, 0).numpy())
+            ax.axis("off")
+            if i == 0:
+                ax.set_title(f"σ={s}", fontsize=9)
+            if j == 0:
+                ax.set_ylabel(f"patch={c}", fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig("cifar_grid.png", dpi=200)
+    plt.show()
+
+def show_imagenet_images(cutout_sizes, sigmas, config, args, device):
+    n_rows = len(cutout_sizes)
+    n_cols = len(sigmas)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3 * n_cols, 3 * n_rows))
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
+
+    imagenet_mean = [0.485, 0.456, 0.406]
+    imagenet_std = [0.229, 0.224, 0.225]
+
+    normalize = transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
+    inv_normalize = transforms.Normalize(
+        mean=[-m / s for m, s in zip(imagenet_mean, imagenet_std)],
+        std=[1 / s for s in imagenet_std]
+    )
+    eval_tf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224), transforms.ToTensor(), normalize])
+
+    # Load a few sample images from ImageNet val set (or your own dataset)
+    base_dataset = datasets.ImageFolder(os.path.join(args.data_path, "val"), eval_tf)
+    base_loader = DataLoader(base_dataset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=args.num_workers, pin_memory=True)
+
+    base_images, _ = next(iter(base_loader))
+    base_image = base_images[0].unsqueeze(0).to(device)
+
+    for i, c in enumerate(cutout_sizes):
+        for j, s in enumerate(sigmas):
+            config.update({"cutout_patch_size": c, "sigma": s})
+            train_tf = AugmentationPipeline(config)
+
+            img_aug = train_tf(base_image.squeeze(0).clone())
+            img = inv_normalize(img_aug.squeeze(0)).clamp(0, 1)
+
+            ax = axes[i, j] if n_rows > 1 else axes[j]
+            ax.imshow(img.cpu().permute(1, 2, 0).numpy())
+            ax.axis("off")
+            if i == 0:
+                ax.set_title(f"σ={s}", fontsize=9)
+            if j == 0:
+                ax.set_ylabel(f"patch={c}", fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig("imagenet_grid.png", dpi=200)
+    plt.show()
+
 

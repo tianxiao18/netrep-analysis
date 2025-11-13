@@ -8,10 +8,11 @@ import wandb
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
-from netrep.datasets import get_dataloaders
+from netrep.datasets import get_dataloaders, get_cifar_dataloaders
 from netrep.models import get_model
 from netrep.optimize import train, evaluate, LabelSmoothingCrossEntropy, exclude_from_weight_decay, get_lr_scheduler
 from netrep.augment import AugmentationPipeline
+from netrep.visualize import show_cifar_images, show_imagenet_images
 from argparse import ArgumentParser
 from torchvision import transforms
 import random
@@ -24,6 +25,12 @@ def parse_args():
         "--data_path",
         type=str,
         default="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet"
+    )
+
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="imagenet"
     )
 
     parser.add_argument(
@@ -99,6 +106,24 @@ def parse_args():
         default="resnet"
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42
+    )
+
+    parser.add_argument(
+        "--op_param",
+        type=float,
+        default=0.5
+    )
+
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None
+    )
+
     return parser.parse_args()
 
 def set_seed(seed=42):
@@ -111,23 +136,43 @@ def set_seed(seed=42):
 
 def main():
     args = parse_args()
-    set_seed(43)
+    set_seed(args.seed)
     warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
     param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
-                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean"}
+                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean",
+                  "cutout_jitter": "cutout_patch_size"}
     param_name = param_dict[args.aug_type]
+    print(args.aug_type, args.aug_param, args.seed, args.checkpoint)
 
     print("Setting up dataloader...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    config = {"crop": True, "flip": False, param_name: args.aug_param}  # crop has to be true to ensure same shape input
+    config = {"crop": True, "flip": True, param_name: args.aug_param, "dataset": args.dataset}  # crop has to be true to ensure same shape input
     if "blur" in args.aug_type: config["blur"] = args.aug_type
-    train_tf = AugmentationPipeline(config)
-    eval_tf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor()])
-    print(config)
+    if "cutout" in args.aug_type: config["sigma"] = args.op_param
+    if "cutout_jitter" in args.aug_type: config["cj_strength"] = args.op_param
+    
+    if args.dataset == 'imagenet':
+        mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+        image_crop = [transforms.Resize(256),transforms.CenterCrop(224)]
+    elif args.dataset == 'cifar10':
+        mean, std = [0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010],
+        image_crop = []
 
-    train_loader, val_loader = get_dataloaders(args.data_path, args.batch_size, args.num_workers, train_tf, eval_tf)
-    model = get_model(device, model_name=args.model)
+    train_tf = AugmentationPipeline(config)
+    normalize = transforms.Normalize(mean=mean, std=std)
+    eval_tf = transforms.Compose(image_crop + [transforms.ToTensor(), normalize])
+    print(config)
+    print(train_tf.transforms)
+
+    # show_cifar_images([12, 16, 20, 24, 28], [0.2, 0.3, 0.5, 0.8, 1.0], config, args, device)
+    # show_imagenet_images([20, 30, 50, 100, 150], [0.2, 0.3, 0.5, 0.8, 1.0], config, args, device)
+    if args.dataset == 'imagenet':
+        train_loader, val_loader = get_dataloaders(args.data_path, args.batch_size, args.num_workers, train_tf, eval_tf)
+    elif args.dataset == 'cifar10':
+        train_loader, val_loader = get_cifar_dataloaders(args.data_path, args.batch_size, args.num_workers, train_tf, eval_tf)
+
+    model = get_model(device, model_name=args.model, checkpoint=args.checkpoint)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
     optimizer = optim.SGD(
@@ -153,8 +198,14 @@ def main():
         }
     )
     output_path = f"/mnt/home/the10/ceph/results/netrep/experiments/{args.aug_type}"
+    if args.checkpoint is not None:
+        output_path = os.path.join(output_path, "pretrained")
+    if args.seed != 42:
+        output_path = output_path+f"_seed{args.seed}"
     if args.aug_param is not None:
         output_path = os.path.join(output_path, f"exp_{args.model}_{param_name}_{args.aug_param}")
+    if args.op_param is not None:
+        output_path = output_path+f"_{args.op_param}"
     os.makedirs(os.path.join(output_path, "checkpoints"), exist_ok=True)
 
     print("Training model...")

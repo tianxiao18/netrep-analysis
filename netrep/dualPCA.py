@@ -9,6 +9,10 @@ class DualPCA:
         self.explained_variance_ = None
 
     def fit(self, X):
+        n_samples, n_features = X.shape
+        if not (0 < self.n_components <= min(n_samples, n_features)):
+            raise ValueError(f"n_components={self.n_components} must be between 1 and {min(n_samples, n_features)}")
+
         self.mean_ = np.mean(X, axis=0)
         X_centered = X - self.mean_
 

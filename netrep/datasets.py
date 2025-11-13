@@ -22,13 +22,6 @@ def get_transforms():
     return train_transform, eval_transform
 
 def get_dataloaders(data_dir, batch_size, num_workers, train_tf, eval_tf):
-    # train_dataset, val_dataset = get_split_datasets(
-    #     train_dir="/mnt/gpuxl/scc/AI_DATASETS/ImageNet/2012/imagenet/train",
-    #     val_ratio=val_ratio,
-    #     seed=seed,
-    #     train_transform=train_tf,
-    #     val_transform=eval_tf
-    # )
     train_dataset = datasets.ImageFolder(os.path.join(data_dir, "train"), train_tf)
     val_dataset = datasets.ImageFolder(os.path.join(data_dir, "val"), eval_tf)
 
@@ -37,6 +30,16 @@ def get_dataloaders(data_dir, batch_size, num_workers, train_tf, eval_tf):
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=True)
     
+    return train_loader, val_loader
+
+def get_cifar_dataloaders(data_dir, batch_size, num_workers, train_tf, eval_tf, download=True):
+    train_dataset = datasets.CIFAR10(root=data_dir, train=True, transform=train_tf, download=download)
+    val_dataset   = datasets.CIFAR10(root=data_dir, train=False, transform=eval_tf, download=download)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=True)
     return train_loader, val_loader
 
 def get_split_datasets(train_dir, val_ratio=0.1, seed=42, train_transform=None, val_transform=None):
