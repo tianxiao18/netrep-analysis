@@ -24,6 +24,9 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import seaborn as sns
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 from tqdm import tqdm
 from adjustText import adjust_text
 import re
@@ -32,6 +35,8 @@ import gc
 import math
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
+import matplotlib.tri as mtri
+from matplotlib.collections import PolyCollection
 
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
@@ -238,7 +243,7 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
         pca = PCA(n_components=2, random_state=42)
         coordinates = pca.fit_transform(Z)
         coord_list.append(coordinates)
-    
+
     all_coords = np.vstack(coord_list)
     x_min, x_max = np.min(all_coords[:, 0]-0.05), np.max(all_coords[:, 0]+0.05)
     y_min, y_max = np.min(all_coords[:, 1]-0.05), np.max(all_coords[:, 1]+0.05)
@@ -260,7 +265,7 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
     x = [float(c.split("=")[1]) for c, _ in network_names]
     y = [float(s.split("=")[1]) for _, s in network_names]
 
-    C_colors = cm.Greens(np.linspace(0.3, 1, len(C_vals)))
+    cs_to_idx = {(c_val, s_val): i for i, (c_val, s_val) in enumerate(zip(x, y))}
 
     for l in range(num_layers):
         coordinates = coord_list[l]
@@ -290,6 +295,19 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
 
         for spine in ['top', 'right']:
             ax.spines[spine].set_visible(False)
+
+        special_path = [(0.0, 0.0),(12.0, 0.2),(12.0, 0.3),(12.0, 0.5),(12.0, 1.0)]
+
+        special_indices = [
+            cs_to_idx[(c_val, s_val)]
+            for (c_val, s_val) in special_path
+            if (c_val, s_val) in cs_to_idx
+        ]
+
+        if len(special_indices) >= 2:
+            pts = coordinates[special_indices]
+            for i in range(1, len(pts)):
+                ax.plot([pts[0,0],pts[i,0]], [pts[0,1],pts[i,1]], linestyle=":", color="gray", zorder=0)
             
     ax.legend(fontsize=8, labelspacing=0.8, frameon=False)
 
@@ -306,6 +324,443 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
     plt.savefig(f'{output_path}/mds_embedding.png')
     print(f"Saved to {output_path}/mds_embedding.png")
     plt.close()
+
+def visualize_coordinates_3d_plotly(distmat, layer_names, network_names, output_path):
+    """
+    Interactive 3D version of your function using Plotly subplots.
+    Saves:  <output_path>/mds_embedding_3d.html
+    """
+
+    os.makedirs(output_path, exist_ok=True)
+
+    num_layers = len(layer_names)
+
+    # --- subplot grid (similar spirit to your matplotlib layout) ---
+    rows = 1
+    cols = int(np.ceil(num_layers / rows)) if num_layers > 0 else 1
+
+    # nicer titles (same logic you had)
+    subplot_titles = [
+        ('.'.join(n.split('.')[1:]) if '.' in n else n)
+        for n in layer_names
+    ]
+
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        specs=[[{"type": "scene"} for _ in range(cols)] for _ in range(rows)],
+        subplot_titles=subplot_titles
+    )
+
+    # --- compute per-layer 3D coords (MDS->PCA(3)) ---
+    coord_list = []
+    for l in range(num_layers):
+        indices = np.arange(l, distmat.shape[0], num_layers)
+        selected_distmat = distmat[indices[:, None], indices]
+
+        embedding = MDS(
+            n_components=200,
+            metric=True,
+            eps=1e-5,
+            normalized_stress="auto",
+            dissimilarity="precomputed",
+            random_state=42
+        )
+        Z = embedding.fit_transform(np.abs(np.real(selected_distmat)))
+        print(f"Layer {layer_names[l]} stress: {embedding.stress_:.4f}")
+
+        pca = PCA(n_components=3, random_state=42)
+        coordinates = pca.fit_transform(Z)
+        coord_list.append(coordinates)
+
+    # --- global axis ranges so all subplots are comparable ---
+    all_coords = np.vstack(coord_list) if coord_list else np.zeros((0, 3))
+    pad = 0.05
+    x_rng = [float(all_coords[:, 0].min() - pad), float(all_coords[:, 0].max() + pad)] if len(all_coords) else [-1, 1]
+    y_rng = [float(all_coords[:, 1].min() - pad), float(all_coords[:, 1].max() + pad)] if len(all_coords) else [-1, 1]
+    z_rng = [float(all_coords[:, 2].min() - pad), float(all_coords[:, 2].max() + pad)] if len(all_coords) else [-1, 1]
+
+    # --- parse network_names like "C=...,s=..." (same as you do) ---
+    network_names_split = [name.split(",") for name in network_names]
+    x = [float(c.split("=")[1]) for c, _ in network_names_split]  # C values
+    y = [float(s.split("=")[1]) for _, s in network_names_split]  # s values
+
+    C_vals = sorted(set(x))
+    s_vals = sorted(set(y))
+    C_to_idx = {c: i for i, c in enumerate(C_vals)}
+    s_to_idx = {s: i for i, s in enumerate(s_vals)}
+
+    # Colors from matplotlib Greens -> plotly rgba strings
+    C_colors_rgba = cm.Greens(np.linspace(0.3, 1.0, len(C_vals)))  # Nx4 floats
+    C_colors = [
+        f"rgba({int(r*255)},{int(g*255)},{int(b*255)},{a:.3f})"
+        for (r, g, b, a) in C_colors_rgba
+    ]
+
+    # Plotly marker symbols (a small set; extend if you have more s_vals)
+    plotly_symbols = ['circle', 'square', 'diamond', 'circle', 'square', 'diamond', 'circle', 'square', 'diamond']
+    s_symbols = plotly_symbols[:len(s_vals)]
+
+    cs_to_idx = {(c_val, s_val): i for i, (c_val, s_val) in enumerate(zip(x, y))}
+
+    # special path (your updated one)
+    special_path = [
+        (0.0, 0.0),
+        (4.0, 0.05),
+        (4.0, 0.1),
+        (4.0, 0.2),
+        (4.0, 0.3),
+        (4.0, 0.5),
+        (4.0, 0.8),
+        (4.0, 1.0),
+    ]
+    special_indices = [
+        cs_to_idx[(c_val, s_val)]
+        for (c_val, s_val) in special_path
+        if (c_val, s_val) in cs_to_idx
+    ]
+
+    # --- add traces per layer/subplot ---
+    for l in range(num_layers):
+        r = (l // cols) + 1
+        c = (l % cols) + 1
+        coordinates = coord_list[l]
+
+        # points grouped by (C,s) to preserve BOTH discrete color and discrete symbol
+        for i, (c_val, s_val) in enumerate(zip(x, y)):
+            color = C_colors[C_to_idx[c_val]]
+            symbol = s_symbols[s_to_idx[s_val]]
+
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[coordinates[i, 0]],
+                    y=[coordinates[i, 1]],
+                    z=[coordinates[i, 2]],
+                    mode="markers",
+                    marker=dict(size=6, color=color, symbol=symbol),
+                    text=[f"C={c_val}, s={s_val}"],
+                    hoverinfo="text",
+                    showlegend=False
+                ),
+                row=r,
+                col=c
+            )
+
+        # grid lines for fixed C
+        for c_val in C_vals:
+            idx = [i for i, xx in enumerate(x) if xx == c_val]
+            pts = coordinates[idx]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                    mode="lines",
+                    line=dict(color="gray", dash="dot", width=2),
+                    hoverinfo="skip",
+                    showlegend=False
+                ),
+                row=r, col=c
+            )
+
+        # grid lines for fixed s
+        for s_val in s_vals:
+            idx = [i for i, yy in enumerate(y) if yy == s_val]
+            pts = coordinates[idx]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                    mode="lines",
+                    line=dict(color="gray", dash="dot", width=2),
+                    hoverinfo="skip",
+                    showlegend=False
+                ),
+                row=r, col=c
+            )
+
+        # special star connections from first special point to others (if present)
+        if len(special_indices) >= 2:
+            pts = coordinates[special_indices]
+            for i in range(1, len(pts)):
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=[pts[0, 0], pts[i, 0]],
+                        y=[pts[0, 1], pts[i, 1]],
+                        z=[pts[0, 2], pts[i, 2]],
+                        mode="lines",
+                        line=dict(color="gray", dash="dot", width=2),
+                        hoverinfo="skip",
+                        showlegend=False
+                    ),
+                    row=r, col=c
+                )
+
+        # per-subplot axis labels/ranges
+        fig.update_scenes(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=False),
+            row=r,
+            col=c
+        )
+
+        fig.update_layout(
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            margin=dict(l=10, r=10, t=5, b=10)
+        )
+
+    # --- build a single legend (global) using "dummy" traces ---
+    # C legend entries (color)
+    for c_val in C_vals:
+        fig.add_trace(
+            go.Scatter3d(
+                x=[None], y=[None], z=[None],
+                mode="markers",
+                marker=dict(size=8, color=C_colors[C_to_idx[c_val]], symbol="circle"),
+                name=f"C={c_val}",
+                showlegend=True
+            )
+        )
+    # s legend entries (symbol)
+    for s_val in s_vals:
+        fig.add_trace(
+            go.Scatter3d(
+                x=[None], y=[None], z=[None],
+                mode="markers",
+                marker=dict(size=8, color="black", symbol=s_symbols[s_to_idx[s_val]]),
+                name=f"s={s_val}",
+                showlegend=True
+            )
+        )
+
+    fig.update_layout(
+        title="3D MDS Embeddings (Interactive)",
+        height=rows * 360,
+        width=cols * 340,
+        legend=dict(itemsizing="constant"),
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+
+    out_html = os.path.join(output_path, "mds_embedding_3d.html")
+    fig.write_html(out_html)
+    print(f"Saved interactive plot to {out_html}")
+
+def visualize_coordinates_3d(distmat, layer_names, network_names, output_path):
+    num_layers = len(layer_names)
+    rows, cols = 4, len(network_names)//4
+    fig = plt.figure(figsize=(cols * 6, rows * 5))
+
+    axes = []
+    for i in range(rows * cols):
+        ax = fig.add_subplot(rows, cols, i + 1, projection="3d")
+        axes.append(ax)
+
+    for ax in axes[num_layers:]:
+        ax.set_axis_off()
+
+    coord_list = []
+    for l in range(num_layers):
+        indices = np.arange(l, distmat.shape[0], num_layers)
+        selected_distmat = distmat[indices[:, None], indices]
+
+        embedding = MDS(
+            n_components=200,
+            metric=True,
+            eps=1e-5,
+            normalized_stress='auto',
+            dissimilarity='precomputed',
+            random_state=42
+        )
+        Z = embedding.fit_transform(np.abs(np.real(selected_distmat)))
+        print(f"Layer {layer_names[l]} stress: {embedding.stress_:.4f}")
+
+        pca = PCA(n_components=3, random_state=42)
+        coordinates = pca.fit_transform(Z)
+        coord_list.append(coordinates)
+
+    all_coords = np.vstack(coord_list)
+    x_min, x_max = np.min(all_coords[:, 0]-0.05), np.max(all_coords[:, 0]+0.05)
+    y_min, y_max = np.min(all_coords[:, 1]-0.05), np.max(all_coords[:, 1]+0.05)
+
+    network_names = [name.split(',') for name in network_names]
+
+    x = [float(c.split("=")[1]) for c, _ in network_names]
+    y = [float(s.split("=")[1]) for _, s in network_names]
+
+    C_vals = sorted(set(x))
+    s_vals = sorted(set(y))
+
+    C_to_idx = {c: i for i, c in enumerate(C_vals)}
+    s_to_idx = {s: i for i, s in enumerate(s_vals)}
+
+    C_colors = cm.Greens(np.linspace(0.3, 1.0, len(C_vals)))
+    s_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x'][:len(s_vals)]
+
+    x = [float(c.split("=")[1]) for c, _ in network_names]
+    y = [float(s.split("=")[1]) for _, s in network_names]
+
+    cs_to_idx = {(c_val, s_val): i for i, (c_val, s_val) in enumerate(zip(x, y))}
+
+    for l in range(num_layers):
+        coordinates = coord_list[l]
+        ax = axes[l]
+
+        # scatter points
+        for i, (c_val, s_val) in enumerate(zip(x, y)):
+            color = C_colors[C_to_idx[c_val]]
+            marker = s_shapes[s_to_idx[s_val]]
+            ax.scatter(coordinates[i, 0], coordinates[i, 1], coordinates[i, 2], marker=marker, color=color, s=150)
+        
+        # plot grids
+        for c_val in C_vals:
+            idx = [i for i, xx in enumerate(x) if xx == c_val]
+            pts = coordinates[idx]
+            ax.plot(pts[:,0], pts[:,1], pts[:,2], linestyle=":", color="gray", zorder=0)
+
+        for s_val in s_vals:
+            idx = [i for i, yy in enumerate(y) if yy == s_val]
+            pts = coordinates[idx]
+            ax.plot(pts[:,0], pts[:,1], pts[:,2], linestyle=":", color="gray", zorder=0)       
+
+        title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
+        ax.set_title(title)
+        ax.set_xlabel("MDS PC 1")
+        ax.set_ylabel("MDS PC 2")
+        ax.set_zlabel("MDS PC 3")
+
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+
+        # special_path = [(0.0, 0.0),(12.0, 0.2),(12.0, 0.3),(12.0, 0.5),(12.0, 1.0)]
+        special_path = [(0.0, 0.0),(4.0, 0.05),(4.0, 0.1),(4.0, 0.2),(4.0, 0.3),(4.0, 0.5),(4.0, 0.8),(4.0, 1.0)]
+
+        special_indices = [
+            cs_to_idx[(c_val, s_val)]
+            for (c_val, s_val) in special_path
+            if (c_val, s_val) in cs_to_idx
+        ]
+
+        if len(special_indices) >= 2:
+            pts = coordinates[special_indices]
+            for i in range(1, len(pts)):
+                ax.plot([pts[0,0],pts[i,0]], [pts[0,1],pts[i,1]], linestyle=":", color="gray", zorder=0)
+            
+    ax.legend(fontsize=8, labelspacing=0.8, frameon=False)
+
+    handles = (
+        [mpatches.Patch(color=C_colors[i], label=f"C={val}") for i, val in enumerate(C_vals)] +
+        [mlines.Line2D([], [], color="black", marker=s_shapes[i],
+                    ls="None", ms=10, label=f"s={val}") for i, val in enumerate(s_vals)]
+    )
+    ax.legend(handles=handles, bbox_to_anchor=(1.02, 0.5), loc="center left")
+    # ax.set_xlim(x_min, x_max)
+    # ax.set_ylim(y_min, y_max)
+
+    plt.tight_layout()
+    plt.savefig(f'{output_path}/mds_embedding_3d.png')
+    print(f"Saved to {output_path}/mds_embedding_3d.png")
+    plt.close()
+
+
+def visualize_gaussian_curvature(distmat, layer_names, network_names, output_path):
+    num_layers = len(layer_names)
+    rows, cols = 1, len(layer_names)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4), constrained_layout=True)
+    fig.set_constrained_layout_pads(wspace=0.02)
+    axes = axes.flatten()
+
+    for ax in axes[num_layers:]:
+        ax.axis('off')
+
+    coord_list = []
+    layer_distmats = []
+    for l in range(num_layers):
+        indices = np.arange(l, distmat.shape[0], num_layers)
+        selected_distmat = distmat[indices[:, None], indices]
+
+        embedding = MDS(
+            n_components=200,
+            metric=True,
+            eps=1e-5,
+            normalized_stress='auto',
+            dissimilarity='precomputed',
+            random_state=42
+        )
+        Z = embedding.fit_transform(np.abs(np.real(selected_distmat)))
+        print(f"Layer {layer_names[l]} stress: {embedding.stress_:.4f}")
+
+        pca = PCA(n_components=2, random_state=42)
+        coordinates = pca.fit_transform(Z)
+        coord_list.append(coordinates)
+        layer_distmats.append(selected_distmat)
+
+    all_coords = np.vstack(coord_list)
+    network_names = [name.split(',') for name in network_names]
+
+    x = [float(c.split("=")[1]) for c, _ in network_names]
+    y = [float(s.split("=")[1]) for _, s in network_names]
+
+    C_vals = sorted(set(x))
+    s_vals = sorted(set(y))
+    cs_to_idx = {(c_val, s_val): i for i, (c_val, s_val) in enumerate(zip(x, y))}
+
+    for l in range(num_layers):
+        coordinates = coord_list[l]
+        dist_layer = layer_distmats[l]
+        ax = axes[l]
+
+        polys = []
+        K_faces = []
+
+        for ci in range(len(C_vals) - 1):
+            for si in range(len(s_vals) - 1):
+                c0, c1 = C_vals[ci], C_vals[ci+1]
+                s0, s1 = s_vals[si], s_vals[si+1]
+
+                i00 = cs_to_idx[(c0, s0)]  # (c,   s)
+                i01 = cs_to_idx[(c0, s1)]  # (c,   s+ds)
+                i10 = cs_to_idx[(c1, s0)]  # (c+dc,s)
+                i11 = cs_to_idx[(c1, s1)]  # (c+dc,s+ds)
+
+                # --- T1: (c, s), (c, s+ds), (c+dc, s) ---
+                K1 = estimate_curvature(i00, i01, i10, dist_layer)
+                poly1 = coordinates[[i00, i01, i10], :]
+                polys.append(poly1)
+                K_faces.append(K1)
+
+                # --- T2: (c+dc, s), (c, s+ds), (c+dc, s+ds) ---
+                K2 = estimate_curvature(i10, i01, i11, dist_layer)
+                poly2 = coordinates[[i10, i01, i11], :]
+                polys.append(poly2)
+                K_faces.append(K2)
+                
+        K_faces = np.array(K_faces)
+        if len(K_faces) > 0:
+            norm = plt.Normalize(vmin=-100, vmax=100)
+            colors = cm.coolwarm(norm(K_faces))
+
+            mesh = PolyCollection(polys, facecolors=colors,
+                                edgecolors='none', alpha=0.7)
+            ax.add_collection(mesh)
+
+        ax.scatter(coordinates[:, 0], coordinates[:, 1], color='black', s=150)
+       
+        title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
+        ax.set_title(title)
+        ax.set_xlabel("MDS Dimension 1")
+        ax.set_ylabel("MDS Dimension 2")
+
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+
+    plt.tight_layout()
+    sm = plt.cm.ScalarMappable(cmap=cm.coolwarm, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, location='right', shrink=0.8, pad=0.01)
+    cbar.set_label("Gaussian Curvature")
+    plt.savefig(f'{output_path}/gaussian_curvature.png')
+    print(f"Saved to {output_path}/gaussian_curvature.png")
+    plt.close()
+
 
 def visualize_coordinates_all(distmat, layer_names, network_names, output_path):
     num_layers = len(layer_names)
@@ -403,6 +858,20 @@ def compute_all_angles(distmat):
 
     return angles
 
+def estimate_curvature(i, j, k, distmat_layer):
+    a = distmat_layer[j, k]
+    b = distmat_layer[i, k]
+    c = distmat_layer[i, j]
+
+    angles_c = compute_angles(c, a, b)
+    angles_b = compute_angles(b, a, c)
+    angles_a = compute_angles(a, c, b)
+
+    s = (a+b+c)/2
+    area = math.sqrt(s*(s-a)*(s-b)*(s-c))
+    curvature = (angles_a + angles_b + angles_c - np.pi)/area
+    return curvature
+
 def visualize_angles(angles, layer_names, network_names, output_path, symbol="T"):
     T_indices = np.where(np.char.find(network_names, symbol) >= 0)[0]
     angle_lists = []
@@ -427,7 +896,7 @@ def visualize_angles(angles, layer_names, network_names, output_path, symbol="T"
 
         ax = axes[l]
         sns.heatmap(
-            selected_angles[0],
+            selected_angles[7],
             cmap="viridis",
             square=True,
             xticklabels=network_names,
@@ -478,22 +947,66 @@ def visualize_angles(angles, layer_names, network_names, output_path, symbol="T"
     
 
 def compare_angles(angles, layer_names, network_names, output_path):
-    angles[0]
     num_layers = len(layer_names)
 
-    T_mask = np.array(['T' in n for n in network_names], dtype=bool)
-    C_mask = np.array(['C' in n for n in network_names], dtype=bool)
-    T_mask[0] = False
+    n_aug1 = np.unique([n.split(',')[0] for n in network_names]).shape[0]
+    n_aug2 = np.unique([n.split(',')[1] for n in network_names]).shape[0]
+
     T_mean, T_std, C_mean, C_std, cross_mean, cross_std = [], [], [], [], [], []
     
     for l in range(num_layers):
         indices = np.arange(l, angles.shape[0], num_layers)
-        selected_angles = angles[np.ix_(indices, indices, indices)][0]
+        selected_angles = angles[np.ix_(indices, indices, indices)]
 
-        T_vals = np.degrees(selected_angles[np.ix_(T_mask, T_mask)])
-        C_vals = np.degrees(selected_angles[np.ix_(C_mask, C_mask)])
-        X_vals = np.degrees(selected_angles[np.ix_(T_mask, C_mask)])
+        # select the angle anchor point
+        N = len(selected_angles)
+        grid = np.arange(N).reshape(n_aug1, n_aug2)
+
+        a1 = np.arange(n_aug1)
+        a2 = np.arange(1, n_aug2-1)
+        A1, A2 = np.meshgrid(a1, a2, indexing='ij')
         
+        anchors = grid[A1, A2].ravel()
+        left  = grid[A1, A2-1].ravel()
+        right = grid[A1, A2+1].ravel()
+
+        T_vals = np.degrees(selected_angles[anchors, left, right])
+        T_vals_2d = T_vals.reshape(len(a1), len(a2))
+        plt.imshow(T_vals_2d, origin="lower", aspect="auto")
+        plt.colorbar(label="s-values (deg)")
+        plt.savefig(f"sigma_{layer_names[l]}.png")
+        plt.close()
+
+        a1 = np.arange(1, n_aug1-1)
+        a2 = np.arange(n_aug2)
+        A1, A2 = np.meshgrid(a1, a2, indexing='ij')
+
+        anchors = grid[A1, A2].ravel()
+        left  = grid[A1-1, A2].ravel()
+        right = grid[A1+1, A2].ravel()
+
+        C_vals = np.degrees(selected_angles[anchors, left, right])
+        C_vals_2d = C_vals.reshape(len(a1), len(a2))
+        plt.imshow(C_vals_2d, origin="lower", aspect="auto")
+        plt.colorbar(label="c-values (deg)")
+        plt.savefig(f"cutout_{layer_names[l]}.png")
+        plt.close()
+
+        a1 = np.arange(n_aug1-1)
+        a2 = np.arange(n_aug2-1)
+        A1, A2 = np.meshgrid(a1, a2, indexing='ij')
+
+        anchors = grid[A1, A2].ravel()
+        left  = grid[A1, A2+1].ravel()
+        right = grid[A1+1, A2].ravel()
+
+        X_vals = np.degrees(selected_angles[anchors, left, right])
+        X_vals_2d = X_vals.reshape(len(a1), len(a2))
+        plt.imshow(X_vals_2d, origin="lower", aspect="auto")
+        plt.colorbar(label="across-values (deg)")
+        plt.savefig(f"across_{layer_names[l]}.png")
+        plt.close()
+
         T_nonzero = T_vals[T_vals != 0]
         C_nonzero = C_vals[C_vals != 0]
         X_nonzero = X_vals[X_vals != 0]
@@ -547,10 +1060,10 @@ def main():
     os.makedirs(output_path, exist_ok=True)
     pretrain_str = "/pretrained" if args.pretrained else ""
     pretrain_str = f"{pretrain_str}_seed{args.seed}" if args.seed else pretrain_str
+    # experiment_ls = [f"cutout_jitter{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [12.0, 16.0, 20.0, 24.0] for s in [0.1, 0.2, 0.3, 0.4, 0.5]]
+    # experiment_ls = [f"cutout{pretrain_str}/exp_resnet_cutout_patch_size_{c}_{s}" for c in [20.0, 30.0, 50.0, 80.0] for s in [0.2, 0.3, 0.5, 0.8]]
+    # experiment_ls = [f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_0.0_0.0"]+[f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
     experiment_ls = [f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [12.0, 16.0, 20.0, 24.0] for s in [0.2, 0.3, 0.5, 0.8, 1.0]]
-    # experiment_ls += [f"cutout_seed43/exp_wide_resnet_cutout_patch_size_16.0_0.5"]
-    # experiment_ls += [f"cutout_seed44/exp_wide_resnet_cutout_patch_size_16.0_0.5"]
-    # experiment_ls.remove("cutout/pretrained/exp_wide_resnet_cutout_patch_size_20.0_0.2")
 
     print(f"Loading distmat from {result_path}/distance_matrix.npy")
     distmat = np.load(f"{result_path}/distance_matrix.npy")
@@ -563,20 +1076,36 @@ def main():
 
     # TODO: look into cutout patch size 80, blur temp 1.0, remove it for now
     print(len(distmat), l)
-    # distmat = np.delete(distmat, np.arange(20*l, 25*l), axis=0)
-    # distmat = np.delete(distmat, np.arange(20*l, 25*l), axis=1)
-    # distmat = np.delete(distmat, np.arange(10*l, 11*l), axis=0)
-    # distmat = np.delete(distmat, np.arange(10*l, 11*l), axis=1)
+    distmat = distmat[l:, l:]
+    distmat = np.delete(distmat, np.arange(0, 7*2*l), axis=0)
+    distmat = np.delete(distmat, np.arange(0, 7*2*l), axis=1)
+
+    blocks = np.array([0, 1, 7, 8, 14, 15, 21, 22])
+    block_size = 4
+    idx = np.concatenate([
+        np.arange(b * block_size, (b + 1) * block_size)
+        for b in blocks
+    ])
+    distmat = np.delete(np.delete(distmat, idx, axis=0), idx, axis=1)
 
     print(distmat.shape)
     visualize_distance_all(distmat, network_names, name_ls, output_path)
     visualize_coordinates_2d(distmat, network_names, name_ls, output_path)
+    visualize_coordinates_3d_plotly(distmat, network_names, name_ls, output_path)
     # visualize_distance_histogram(distmat, network_names, name_ls, output_path)
-
-    # angles = compute_all_angles(distmat)
+    # visualize_gaussian_curvature(distmat, network_names, name_ls, output_path)
+    
+    if 'clean' in experiment_ls[0]:
+        distmat = distmat[l:, l:]
+        name_ls = name_ls[1:]
+        print(distmat.shape)
+    
+    angles = compute_all_angles(distmat)
+    print(angles.shape)
     # compare_angles(angles, network_names, name_ls, output_path)
     # visualize_angles(angles, network_names, name_ls, output_path, symbol='T')
-    # name_ls[0] = 'C=0'
+    
+    # # name_ls[0] = 'C=0'
     # visualize_angles(angles, network_names, name_ls, output_path, symbol='C')
     # compare_angles(angles, network_names, name_ls, output_path)
 

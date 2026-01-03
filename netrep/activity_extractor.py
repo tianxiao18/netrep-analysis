@@ -52,6 +52,7 @@ class LayerActivityExtractor:
         self._register_hooks()
 
     def _build_dataset_and_labels(self, image_folder, dataset):
+        print(f"Evaluating on {dataset} dataset at {image_folder}")
         if dataset == "imagenet":
             transform = transforms.Compose([
                 transforms.Resize(256),
@@ -113,9 +114,11 @@ class LayerActivityExtractor:
 
         with torch.no_grad():
             pbar = tqdm(self.dataloader, desc="Extracting", leave=False)
-            for inputs, _ in pbar:
+            all_labels = []
+            for inputs, label in pbar:
                 self._batch_feats.clear()
                 _ = self.model(inputs.to(self.device))
+                all_labels.append(label)
 
                 for name, feats in self._batch_feats.items():
                     if name not in first_shapes:
@@ -123,8 +126,12 @@ class LayerActivityExtractor:
                         writer.ensure(name, total_len=total, feat_shape=feats.shape[1:], dtype=np.float16)
                         first_shapes[name] = feats.shape[1:]
                     writer.write_batch(name, feats.numpy())
-                
+            all_labels = torch.cat(all_labels)
+
         writer.close()
+        print(all_labels)
+        print("Saving labels to cifar10_labels.npy")
+        np.save("cifar10_labels.npy", all_labels.cpu().numpy())
         return {name: os.path.join(output_dir, f"{name}.npy") for name in first_shapes}
 
     # def get_activities(self):

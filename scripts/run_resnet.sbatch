@@ -6,10 +6,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=/tmp/%x-%j.out
 
-AUG_TYPE="cutout_jitter"
+AUG_TYPE="cutout"
 AUG_PARAM="12.0"
 OP_PARAM="0.1"
 MODEL="wide_resnet"
@@ -33,8 +33,24 @@ source ~/netrep-analysis/venv/bin/activate
 # python scripts/resnet.py --aug_type=${AUG_TYPE} --aug_param=16.0 --op_param=0.5 --model=${MODEL} --dataset=cifar10 --momentum=0.9 --weight_decay=5e-4 --warmup_epochs=0 --epochs=200 --data_path=/mnt/home/the10/ceph/dataset/cifar10 --seed=44
 # python scripts/resnet.py --aug_type=${AUG_TYPE} --aug_param=28.0 --op_param=1.0 --model=${MODEL} --dataset=cifar10 --base_lr=3e-4 --weight_decay=0.05 --warmup_epochs=0 --epochs=50 --data_path=/mnt/home/the10/ceph/dataset/cifar10 --checkpoint=/mnt/home/the10/ceph/results/netrep/experiments/clean/exp_wide_resnet_clean_0.0/checkpoints/final_model.pth --seed=42
 
-for AUG_PARAM in 12.0 16.0 20.0 24.0; do
-    for OP_PARAM in 0.1 0.2 0.3 0.4 0.5; do
+# here seed42 = full parameter grid, seed43 = MVP for analysis, seed44=epoch100+fine tuning, seed45=epoch0+fine tuning
+echo "Running with AUG_PARAM=0.0 OP_PARAM=0.0"
+python scripts/resnet.py \
+    --aug_type=${AUG_TYPE} \
+    --aug_param=0.0 \
+    --op_param=0.0 \
+    --model=${MODEL} \
+    --dataset=cifar10 \
+    --weight_decay=5e-4 \
+    --momentum=0.9\
+    --warmup_epochs=0 \
+    --epochs=200 \
+    --data_path=/mnt/home/the10/ceph/dataset/cifar10 \
+    --seed=45 \
+    --checkpoint=/mnt/home/the10/ceph/results/netrep/experiments/clean/exp_wide_resnet_clean_0.0/checkpoints/epoch0.pth
+
+for AUG_PARAM in 4.0 8.0 12.0 16.0 20.0 24.0; do
+    for OP_PARAM in 0.05 0.1 0.2 0.3 0.5 0.8 1.0; do
         echo "Running with AUG_PARAM=${AUG_PARAM} OP_PARAM=${OP_PARAM}"
         python scripts/resnet.py \
             --aug_type=${AUG_TYPE} \
@@ -42,12 +58,12 @@ for AUG_PARAM in 12.0 16.0 20.0 24.0; do
             --op_param=${OP_PARAM} \
             --model=${MODEL} \
             --dataset=cifar10 \
-            --base_lr=3e-4 \
-            --weight_decay=0.1 \
+            --weight_decay=5e-4 \
+            --momentum=0.9\
             --warmup_epochs=0 \
-            --epochs=30 \
+            --epochs=200 \
             --data_path=/mnt/home/the10/ceph/dataset/cifar10 \
-            --checkpoint=/mnt/home/the10/ceph/results/netrep/experiments/clean/exp_wide_resnet_clean_0.0/checkpoints/final_model.pth \
-            --seed=42
+            --seed=45 \
+            --checkpoint=/mnt/home/the10/ceph/results/netrep/experiments/clean/exp_wide_resnet_clean_0.0/checkpoints/epoch0.pth
     done
 done
