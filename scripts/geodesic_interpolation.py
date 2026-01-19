@@ -48,7 +48,7 @@ def shape_interp(X, Y, t):
 
 def sq_proc(p, q):
     """
-    Square of the procrustes shape distance.
+    Rimannian shape distance.
 
     Args:
         p: (M, N) array of centered and rescaled neural responses.
@@ -56,7 +56,79 @@ def sq_proc(p, q):
     """
     singular_values = np.linalg.svd(q.T @ p, compute_uv=False)
     return 2 * (1 - np.sum(singular_values))
+    # return np.arccos(np.sum(singular_values))
 
+def exp_map(X, V):
+    """
+    Exponential map on shape space at base X with tangent V.
+    This is simply the exponential map on the sphere - the output
+    is implicitly defined up to an orthogonal transformation.
+
+    Args:
+        X: (M, N) array of centered and unit-norm neural responses.
+        V: (M, N) array that is orthogonal to p
+    
+    Returns:
+        Y: (M, N) array of centered and unit-norm neural responses.
+    """
+    norm_v = np.linalg.norm(V)
+    return center_scale(
+        np.cos(norm_v) * X + np.sin(norm_v) * (V / norm_v)
+    )
+
+def log_map(X, Y):
+    """
+    Logarithmic map on shape space at base X with respect to Y.
+    This is simply the logarithmic map on the sphere after we have
+    aligned Y to X by a procrustes transformation.
+
+    Args:
+        X: (M, N) array of centered and unit-norm neural responses.
+        Y: (M, N) array of centered and unit-norm neural responses.
+    
+    Returns:
+        V: (M, N) array in tangent space at p.
+    """
+    U, _, Vt = np.linalg.svd(Y.T @ X)
+    Y_aligned = Y @ U @ Vt
+    inner = np.clip(np.sum(X * Y_aligned), -1.0, 1.0)
+    theta = np.arccos(inner)
+    if theta < 1e-6:
+        return np.zeros_like(X)
+    V = Y_aligned - inner * X
+    return V * (theta / np.linalg.norm(V))
+
+def proc_dist(X, Y):
+    """
+    Square of the procrustes shape distance.
+
+    Args:
+        X: (M, N) array of centered and rescaled neural responses.
+        Y: (M, N) array of centered and rescaled neural responses.
+    """
+    singular_values = np.linalg.svd(X.T @ Y, compute_uv=False)
+    return np.sqrt(2 * (1 - np.sum(singular_values)))
+
+
+data = np.zeros_like(raw_data)
+for i in range(data.shape[0]):
+    for j in range(data.shape[1]):
+        data[i, j] = center_scale(raw_data[i, j])
+
+pred_dists = np.zeros((len(aug1) - 1, len(aug2) - 1))
+
+# for i in range(len(aug1) - 1):
+#     for j in tqdm(range(len(aug2) - 1)):
+#         A = data[i, j]
+#         B = data[i, j + 1]
+#         C = data[i + 1, j]
+#         D = data[i + 1, j + 1]
+
+#         vB = log_map(A, B)
+#         vC = log_map(A, C)
+
+#         pred_dists[i, j] = proc_dist(exp_map(A, vB + vC), D) / proc_dist(A, D)
+# print(pred_dists)
 n_aug1, n_aug2, _, _ = raw_data.shape
 fig, ax = plt.subplots(n_aug1, n_aug2-2, figsize=(4*(n_aug2-2), 3*n_aug1))
 

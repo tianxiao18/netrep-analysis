@@ -10,7 +10,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 from netrep.datasets import get_dataloaders, get_cifar_dataloaders
 from netrep.models import get_model
-from netrep.optimize import train, evaluate, LabelSmoothingCrossEntropy, exclude_from_weight_decay, get_lr_scheduler
+from netrep.optimize import train, evaluate, LabelSmoothingCrossEntropy, exclude_from_weight_decay, get_lr_scheduler, get_onecycle_lr_scheduler
 from netrep.augment import AugmentationPipeline
 from netrep.visualize import show_cifar_images, show_imagenet_images
 from argparse import ArgumentParser
@@ -89,7 +89,7 @@ def parse_args():
     parser.add_argument(
         "--label_smoothing",
         type=float,
-        default=0.1,
+        default=0.0,
         help="Label smoothing factor"
     )
 
@@ -124,6 +124,11 @@ def parse_args():
         default=None
     )
 
+    parser.add_argument(
+        "--pretrained",
+        action="store_true"
+    )
+
     return parser.parse_args()
 
 def set_seed(seed=42):
@@ -156,7 +161,7 @@ def main():
         mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
         image_crop = [transforms.Resize(256),transforms.CenterCrop(224)]
     elif args.dataset == 'cifar10':
-        mean, std = [0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010],
+        mean, std = [0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010]
         image_crop = []
 
     train_tf = AugmentationPipeline(config)
@@ -172,15 +177,18 @@ def main():
     elif args.dataset == 'cifar10':
         train_loader, val_loader = get_cifar_dataloaders(args.data_path, args.batch_size, args.num_workers, train_tf, eval_tf)
 
-    model = get_model(device, model_name=args.model, checkpoint=args.checkpoint)
+    model = get_model(device, model_name=args.model, checkpoint=args.checkpoint, pretrained=args.pretrained)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
     optimizer = optim.SGD(
-        exclude_from_weight_decay(model.named_parameters(), args.weight_decay),
+        model.parameters(),
         lr=args.base_lr * (args.batch_size / 256),
-        momentum=args.momentum
+        momentum=args.momentum,
+        weight_decay=args.weight_decay
     )
-    lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
+    # lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
+    lr_scheduler = get_onecycle_lr_scheduler(optimizer, len(train_loader), warmup_epochs, args)
+
     best_val_acc = 0
     title = f"{args.model}_{args.aug_type}" if args.aug_param is None else f"{args.model}_{args.aug_type}_{param_name}{args.aug_param}"
 
@@ -198,7 +206,7 @@ def main():
         }
     )
     output_path = f"/mnt/home/the10/ceph/results/netrep/experiments/{args.aug_type}"
-    if args.checkpoint is not None:
+    if args.checkpoint is not None or args.pretrained:
         output_path = os.path.join(output_path, "pretrained")
     if args.seed != 42:
         output_path = output_path+f"_seed{args.seed}"
@@ -210,17 +218,17 @@ def main():
 
     print("Training model...")
     for epoch in range(args.epochs):
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, device)
+        train_loss, train_acc = train(model, train_loader, criterion, optimizer, lr_scheduler, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        lr_scheduler.step()
+        # lr_scheduler.step()
 
         print(f"[Epoch {epoch+1}/{args.epochs}] "
               f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         wandb.log({"epoch": epoch, "train_loss": train_loss, "train_acc": train_acc,
             "val_loss": val_loss, "val_acc": val_acc, "lr": optimizer.param_groups[0]['lr']})
         
-        if epoch < 45 or epoch % 3 == 0:
-            torch.save(model.state_dict(), f"{output_path}/checkpoints/epoch{epoch}.pth")
+        # if epoch % 10 == 0:
+        #     torch.save(model.state_dict(), f"{output_path}/checkpoints/epoch{epoch}.pth")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc

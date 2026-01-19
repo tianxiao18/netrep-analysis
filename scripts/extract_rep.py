@@ -82,8 +82,7 @@ def parse_args():
 
     parser.add_argument(
         "--pretrained",
-        type=bool,
-        default=True
+        action="store_true"
     )
 
     parser.add_argument(
@@ -154,6 +153,7 @@ def compute_across_network_distances(netA, netB):
 
 def compute_distances(X_train, X_test):
     distmat = np.zeros((len(X_train), len(X_train)))
+    diff_norms = np.zeros((len(X_train), len(X_train), len(X_train[0])))
     total_pairs = len(X_train) * (len(X_train) - 1) // 2
 
     # use procruste's metrics
@@ -163,8 +163,14 @@ def compute_distances(X_train, X_test):
         dist = metric.score(X_test[i], X_test[j])
         distmat[i, j] = dist
 
+        # obtain transformed representation
+        if i % 4 == 2 and j % 4 == 2:
+            tX = (X_test[i]-metric.mx_) @ metric.Wx_
+            tY = (X_test[j]-metric.my_) @ metric.Wy_
+            diff_norms[i][j] = np.linalg.norm(tX - tY, axis=1)
+
     distmat += distmat.T
-    return distmat
+    return distmat, diff_norms
 
 def edit_distances(X_train, distmat, idxs):
     distmat = distmat.copy()
@@ -265,9 +271,9 @@ def extract_activity_all(experiment_ls, base_path, args):
     X_train_all, X_test_all, network_names_all = [], [], []
 
     # extract network names, assuming all experiments has the same network names
-    print(f"Loading from {base_path}/experiments/{experiment_ls[-1]}/checkpoints/final_model.pth")
-    print(base_path, experiment_ls[-1])
-    network_names = LayerActivityExtractor(checkpoint_path=f'{base_path}/experiments/{experiment_ls[-1]}/checkpoints/final_model.pth',
+    print(f"Loading from {base_path}/experiments/{experiment_ls[0]}/checkpoints/final_model.pth")
+    print(base_path, experiment_ls[0])
+    network_names = LayerActivityExtractor(checkpoint_path=f'{base_path}/experiments/{experiment_ls[0]}/checkpoints/final_model.pth',
         image_folder=args.data_path,batch_size=args.batch_size, num_workers=args.num_workers,test_size=args.test_size, 
         model_name=args.model_name, dataset=args.dataset
     ).get_layer_names()
@@ -278,27 +284,27 @@ def extract_activity_all(experiment_ls, base_path, args):
         save_path = f'{output_path}/results/activities_pca.npz'
         # save_path = None
 
-        # if save_path and os.path.isfile(save_path):
-        #     print(f"Loading PCA-reduced activities from {save_path}")
+        if save_path and os.path.isfile(save_path):
+            print(f"Loading PCA-reduced activities from {save_path}")
 
-        #     with np.load(save_path, allow_pickle=False) as data:
-        #         pca_activities = {k: data[k] for k in data.files}
-        #         X_train = [pca_activities[name].reshape(pca_activities[name].shape[0], -1) for name in network_names]
-        #         X_test = [pca_activities[name].reshape(pca_activities[name].shape[0], -1) for name in network_names]
-        # else:
-        print(f"Extracting PCA-reduced activities to {save_path}")
-        extractor = LayerActivityExtractor(
-            checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
-            image_folder=args.data_path,
-            batch_size=args.batch_size, 
-            num_workers=args.num_workers,
-            test_size=args.test_size,
-            model_name=args.model_name,
-            dataset=args.dataset
-        )
-        network_names = extractor.get_layer_names()
-        activities = extractor.get_activities()
-        X_train, X_test = split_activity(activities, save_path=save_path, n_components=1000, test_size=0)
+            with np.load(save_path, allow_pickle=False) as data:
+                pca_activities = {k: data[k] for k in data.files}
+                X_train = [pca_activities[name].reshape(pca_activities[name].shape[0], -1) for name in network_names]
+                X_test = [pca_activities[name].reshape(pca_activities[name].shape[0], -1) for name in network_names]
+        else:
+            print(f"Extracting PCA-reduced activities to {save_path}")
+            extractor = LayerActivityExtractor(
+                checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
+                image_folder=args.data_path,
+                batch_size=args.batch_size, 
+                num_workers=args.num_workers,
+                test_size=args.test_size,
+                model_name=args.model_name,
+                dataset=args.dataset
+            )
+            network_names = extractor.get_layer_names()
+            activities = extractor.get_activities()
+            X_train, X_test = split_activity(activities, save_path=save_path, n_components=1000, test_size=0)
 
         X_train_all.extend(X_train)
         X_test_all.extend(X_test)
@@ -354,7 +360,7 @@ def extract_raw_activity(experiment_ls, base_path, args, n_aug1, n_aug2):
         X_concat = np.stack(arr_ls, axis=0)
         X_concat = X_concat.reshape(n_aug1, n_aug2, X_concat.shape[-2], X_concat.shape[-1])
         print(X_concat.shape)
-        np.savez_compressed(f'{output_path}/{name}_origin.npz', X_concat)
+        np.savez_compressed(f'{output_path}/{name}.npz', X_concat)
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -481,6 +487,7 @@ def main():
     base_path = '/mnt/home/the10/ceph/results/netrep'
     output_path = f'{base_path}/experiments/{args.experiment}'
     result_path = f'{output_path}/results_seed{args.seed}' if args.seed else f'{output_path}/results'
+    result_path = f'{result_path}_pretrained' if args.pretrained else result_path
     result_path = f'{result_path}/{args.model}' if args.model != 'final_model' else result_path
     embed_path = f'{result_path}/activities.npz'
     print(result_path)
@@ -490,7 +497,7 @@ def main():
     pretrain_str = "/pretrained" if args.pretrained else ""
     pretrain_str = f"{pretrain_str}_seed{args.seed}" if args.seed else pretrain_str
     # experiment_ls = [f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_0.0_0.0"]
-    experiment_ls = [f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
+    experiment_ls = [f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
     # experiment_ls = ["clean/exp_wide_resnet_clean_0.0"]+[f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}" for c in [12.0, 16.0, 20.0, 24.0] for s in [0.2, 0.3, 0.5, 0.8, 1.0]]
     # experiment_ls += [f"cutout_seed43/exp_wide_resnet_cutout_patch_size_16.0_0.5"]
     # experiment_ls += [f"cutout_seed44/exp_wide_resnet_cutout_patch_size_16.0_0.5"]
@@ -531,12 +538,13 @@ def main():
     # extract activity for all networks
     else:
         X_train, X_test, network_names = extract_activity_all(experiment_ls, base_path, args)
-        # extract_raw_activity(experiment_ls, base_path, args, n_aug1=6, n_aug2=7)
+        # extract_raw_activity(experiment_ls, base_path, args, n_aug1=7, n_aug2=7)
 
     # compute procruste's distance between pair of networks
     if not os.path.isfile(f"{result_path}/distance_matrix.npy"):
-        distmat = compute_distances(X_train, X_train)
+        distmat, norms = compute_distances(X_train, X_train)
         np.save(f'{result_path}/distance_matrix.npy', distmat)
+        np.save(f'{result_path}/diff_norms.npy', norms)
     elif args.edit:
         distmat = np.load(f"{result_path}/distance_matrix.npy")
         distmat = edit_distances(X_train, distmat, np.arange(10*4, 11*4))
@@ -545,11 +553,12 @@ def main():
     else:
         distmat = np.load(f"{result_path}/distance_matrix.npy")
     print(len(X_train),len(X_train[0]), distmat.shape)
+
     if 'all' in args.experiment:
         l = len(network_names) // len(experiment_ls)
         expanded_experiment_ls = [exp for exp in experiment_ls for _ in range(l)]
         name_ls, _ = exp_to_name(expanded_experiment_ls)
-        visualize_distance(distmat, name_ls, result_path)
+        visualize_distance(distmat, name_ls, result_path, group_by_layers=True)
 
         name_ls, _ = exp_to_name(experiment_ls)
     else:

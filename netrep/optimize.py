@@ -6,6 +6,7 @@ from tqdm import tqdm
 from .blur import add_fixed_blur, add_random_blur, add_random_blur_no_gray
 import numpy as np
 import torchvision.transforms.functional as TF
+import math
 
 # Loss with label smoothing
 class LabelSmoothingCrossEntropy(nn.Module):
@@ -36,14 +37,29 @@ def exclude_from_weight_decay(named_params, weight_decay):
 # Cosine learning rate schedule with warmup
 def get_lr_scheduler(optimizer, warmup_epochs, total_epochs):
     def lr_lambda(epoch):
-        if epoch < warmup_epochs:
+        if warmup_epochs > 0 and epoch < warmup_epochs:
             return float(epoch + 1) / warmup_epochs
         else:
-            return 0.5 * (1 + torch.cos(torch.tensor((epoch - warmup_epochs) / (total_epochs - warmup_epochs) * 3.1415926535)))
+            t = (epoch - warmup_epochs) / max(1, (total_epochs - warmup_epochs))
+            return 0.5 * (1.0 + math.cos(math.pi * t))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+def get_onecycle_lr_scheduler(optimizer, steps_per_epoch, warmup_epochs, args, pct_start=0.1, div_factor=25.0, final_div_factor=1e4):
+    if warmup_epochs and warmup_epochs > 0:
+        pct_start = min(0.9, max(0.01, warmup_epochs / float(args.epochs)))
 
-def train(model, dataloader, criterion, optimizer, device):
+    return torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=args.base_lr * (args.batch_size / 256),
+        epochs=args.epochs,
+        steps_per_epoch=steps_per_epoch,
+        pct_start=pct_start,          
+        anneal_strategy="cos",
+        div_factor=div_factor,        # initial_lr = max_lr/div_factor
+        final_div_factor=final_div_factor    # final_lr = initial_lr/final_div_factor
+    )
+
+def train(model, dataloader, criterion, optimizer, lr_scheduler, device):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
     pbar = tqdm(dataloader, desc="Training", leave=False)
@@ -56,6 +72,7 @@ def train(model, dataloader, criterion, optimizer, device):
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
+        lr_scheduler.step()
 
         total_loss += loss.item() * images.size(0)
         _, preds = outputs.max(1)

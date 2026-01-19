@@ -20,6 +20,7 @@ import itertools
 from netrep.metrics import LinearMetric
 from sklearn.manifold import MDS
 from sklearn.decomposition import PCA
+from torchvision import datasets, transforms
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -50,7 +51,7 @@ def parse_args():
     parser.add_argument(
         "--data_path",
         type=str,
-        default="/mnt/home/the10/ceph/dataset/imagenet/val"
+        default="/mnt/home/the10/ceph/dataset/cifar10"
     )
 
     parser.add_argument(
@@ -79,8 +80,7 @@ def parse_args():
 
     parser.add_argument(
         "--pretrained",
-        type=bool,
-        default=True
+        action="store_true"
     )
 
     parser.add_argument(
@@ -259,8 +259,10 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
     C_to_idx = {c: i for i, c in enumerate(C_vals)}
     s_to_idx = {s: i for i, s in enumerate(s_vals)}
 
-    C_colors = cm.Greens(np.linspace(0.3, 1.0, len(C_vals)))
-    s_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x'][:len(s_vals)]
+    color_values = np.linspace(0.3, 1.0, len(C_vals))
+    C_colors = [cm.Purples(color_values), cm.Blues(color_values), cm.Greens(color_values), cm.Oranges(color_values)]
+    base_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
+    s_shapes = list(itertools.islice(itertools.cycle(base_shapes), len(s_vals)))
 
     x = [float(c.split("=")[1]) for c, _ in network_names]
     y = [float(s.split("=")[1]) for _, s in network_names]
@@ -273,7 +275,7 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
 
         # scatter points
         for i, (c_val, s_val) in enumerate(zip(x, y)):
-            color = C_colors[C_to_idx[c_val]]
+            color = C_colors[l][C_to_idx[c_val]]
             marker = s_shapes[s_to_idx[s_val]]
             ax.scatter(coordinates[i, 0], coordinates[i, 1], marker=marker, color=color, s=150)
         
@@ -312,7 +314,7 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
     ax.legend(fontsize=8, labelspacing=0.8, frameon=False)
 
     handles = (
-        [mpatches.Patch(color=C_colors[i], label=f"C={val}") for i, val in enumerate(C_vals)] +
+        [mpatches.Patch(color=C_colors[-1][i], label=f"C={val}") for i, val in enumerate(C_vals)] +
         [mlines.Line2D([], [], color="black", marker=s_shapes[i],
                     ls="None", ms=10, label=f"s={val}") for i, val in enumerate(s_vals)]
     )
@@ -593,7 +595,8 @@ def visualize_coordinates_3d(distmat, layer_names, network_names, output_path):
     s_to_idx = {s: i for i, s in enumerate(s_vals)}
 
     C_colors = cm.Greens(np.linspace(0.3, 1.0, len(C_vals)))
-    s_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x'][:len(s_vals)]
+    base_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
+    s_shapes = list(itertools.islice(itertools.cycle(base_shapes), len(s_vals)))
 
     x = [float(c.split("=")[1]) for c, _ in network_names]
     y = [float(s.split("=")[1]) for _, s in network_names]
@@ -858,6 +861,69 @@ def compute_all_angles(distmat):
 
     return angles
 
+def visualize_diff_norms(diff_norms, n_layers, data_path, layer_idx=2, save_dir='.'):
+    # diff_norms is big matrix of size (n_aug1*n_aug2*n_layers, n_aug1*n_aug2*n_layers)
+    print("Processing diff norms...")
+    idx = np.arange(layer_idx, len(diff_norms), n_layers)
+    selected_norms = diff_norms[np.ix_(idx, idx)]
+    
+    n_augs = np.sqrt(len(diff_norms)/n_layers).astype(int)
+    rows = np.concatenate([b*n_augs + np.arange(n_augs-1) for b in range(n_augs)])
+    cols = rows + 1
+
+    # rows = np.concatenate([np.arange(n_augs-1)*n_augs + c for c in range(n_augs)])  # (a, c)
+    # cols = rows + n_augs   
+
+    off_blocks = selected_norms[rows, cols, :].reshape(n_augs, n_augs-1, -1)
+    # off_blocks = selected_norms[rows, cols, :].reshape(n_augs-1, n_augs, -1)
+    nrows, ncols = len(off_blocks), len(off_blocks[0])
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 3*nrows), sharex=True, sharey=True)
+    cifar_index = np.zeros_like(off_blocks, dtype=int)
+
+    for i in range(nrows):
+        for j in range(ncols):
+            cifar_index[i][j] = np.argsort(off_blocks[i][0])
+            axes[i][j].scatter(np.arange(len(cifar_index[i][j])), off_blocks[i][j][cifar_index[i][j]], s=10)
+    
+    plt.savefig(f'{save_dir}/diff_norm_sorted.png')
+
+    eval_tf = transforms.ToTensor()
+    dataset = datasets.CIFAR10(root=data_path, train=False, transform=eval_tf, download=False)
+    image_of_interest = cifar_index[0][0]
+    print(cifar_index.shape)
+
+    def _show_images(pair_indices, out_name, title, ncols=5):
+        img_idxs = pair_indices
+
+        n = len(img_idxs)
+        ncols = min(ncols, n) if n > 0 else ncols
+        nrows = int(math.ceil(n / ncols))
+
+        fig, ax = plt.subplots(nrows, ncols, figsize=(3 * ncols, 3 * nrows))
+        ax = np.array(ax).reshape(-1)
+
+        for k, idx in enumerate(img_idxs):
+            img, label = dataset[int(idx)]
+            ax[k].imshow(np.transpose(img.numpy(), (1, 2, 0)))
+            ax[k].set_title(f"idx={int(idx)}\nlabel={label}")
+            ax[k].axis("off")
+
+        fig.suptitle(title, y=0.98)
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_dir, out_name), dpi=200)
+        plt.close(fig)
+
+    n_show = 20
+    smallest = image_of_interest[:n_show]
+    largest = image_of_interest[-n_show:][::-1]
+    mid_start = len(image_of_interest)//2 - n_show//2
+    middle = image_of_interest[mid_start: mid_start + n_show]
+
+    _show_images(smallest, "smallest_dist.png", f"Smallest distances (layer={layer_idx})")
+    _show_images(largest, "biggest_dist.png", f"Largest distances (layer={layer_idx})")
+    _show_images(middle, "middle_dist.png", f"Middle distances (layer={layer_idx})")
+
+
 def estimate_curvature(i, j, k, distmat_layer):
     a = distmat_layer[j, k]
     b = distmat_layer[i, k]
@@ -1055,6 +1121,7 @@ def main():
     base_path = '/mnt/home/the10/ceph/results/netrep'
     output_path = f'{base_path}/experiments/{args.experiment}'
     result_path = f'{output_path}/results_seed{args.seed}' if args.seed else f'{output_path}/results'
+    result_path = f'{result_path}_pretrained' if args.pretrained else result_path
     output_path = f'{result_path}/analysis'
 
     os.makedirs(output_path, exist_ok=True)
@@ -1063,30 +1130,33 @@ def main():
     # experiment_ls = [f"cutout_jitter{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [12.0, 16.0, 20.0, 24.0] for s in [0.1, 0.2, 0.3, 0.4, 0.5]]
     # experiment_ls = [f"cutout{pretrain_str}/exp_resnet_cutout_patch_size_{c}_{s}" for c in [20.0, 30.0, 50.0, 80.0] for s in [0.2, 0.3, 0.5, 0.8]]
     # experiment_ls = [f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_0.0_0.0"]+[f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
-    experiment_ls = [f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [12.0, 16.0, 20.0, 24.0] for s in [0.2, 0.3, 0.5, 0.8, 1.0]]
+    experiment_ls = [f"cutout{pretrain_str}/exp_wide_resnet_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
 
     print(f"Loading distmat from {result_path}/distance_matrix.npy")
     distmat = np.load(f"{result_path}/distance_matrix.npy")
     # network_indices = [1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 2.3, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 4.0, 4.1, 4.2]
-    network_indices = [3.5, 4.2]
+    network_indices = [3.1, 4.1]
     network_names = [f'module.layer{i}' for i in network_indices] + ['avgpool', 'fc']
+
+    diff_norms = np.load(f"{result_path}/diff_norms.npy")
+    visualize_diff_norms(diff_norms, len(network_names), args.data_path, save_dir=output_path)
 
     l = len(network_names)
     name_ls = exp_to_name(experiment_ls)[0]
 
     # TODO: look into cutout patch size 80, blur temp 1.0, remove it for now
     print(len(distmat), l)
-    distmat = distmat[l:, l:]
-    distmat = np.delete(distmat, np.arange(0, 7*2*l), axis=0)
-    distmat = np.delete(distmat, np.arange(0, 7*2*l), axis=1)
+    # distmat = distmat[l:, l:]
+    # distmat = np.delete(distmat, np.arange(0, 7*2*l), axis=0)
+    # distmat = np.delete(distmat, np.arange(0, 7*2*l), axis=1)
 
-    blocks = np.array([0, 1, 7, 8, 14, 15, 21, 22])
-    block_size = 4
-    idx = np.concatenate([
-        np.arange(b * block_size, (b + 1) * block_size)
-        for b in blocks
-    ])
-    distmat = np.delete(np.delete(distmat, idx, axis=0), idx, axis=1)
+    # blocks = np.array([0, 1, 7, 8, 14, 15, 21, 22])
+    # block_size = 4
+    # idx = np.concatenate([
+    #     np.arange(b * block_size, (b + 1) * block_size)
+    #     for b in blocks
+    # ])
+    # distmat = np.delete(np.delete(distmat, idx, axis=0), idx, axis=1)
 
     print(distmat.shape)
     visualize_distance_all(distmat, network_names, name_ls, output_path)
