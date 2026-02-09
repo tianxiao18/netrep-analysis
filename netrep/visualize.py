@@ -14,8 +14,9 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import torchvision
 import os
+from itertools import groupby
 
-def visualize_distance(distmat, network_names, output_path, off_diagonal_color=True):
+def visualize_distance(distmat, network_names, output_path, off_diagonal_color=True, group_by_layers=False):
     distmat = np.array(distmat)
     mask = np.eye(distmat.shape[0], dtype=bool)
 
@@ -23,6 +24,20 @@ def visualize_distance(distmat, network_names, output_path, off_diagonal_color=T
     off_diag_vals = distmat[~mask] if off_diagonal_color else distmat
     vmin = off_diag_vals.min()
     vmax = off_diag_vals.max()
+
+    if group_by_layers:
+        if ',' in network_names[-1]:
+            n_c = np.unique(np.array([x.split(",")[0] for x in network_names])).shape[0]
+            n_s = np.unique(np.array([x.split(",")[1] for x in network_names])).shape[0]
+
+            new_order = np.arange(len(network_names)).reshape(n_c, n_s, -1).transpose(2, 0, 1).ravel()
+            print(new_order)
+            distmat = distmat[np.ix_(new_order, new_order)]
+        else:
+            new_order = np.arange(len(network_names)).reshape(-1, 4).T.ravel()
+            print(new_order)
+            distmat = distmat[np.ix_(new_order, new_order)]
+
 
     plt.figure(figsize=(8, 6))
     ax = sns.heatmap(
@@ -40,7 +55,6 @@ def visualize_distance(distmat, network_names, output_path, off_diagonal_color=T
     plt.ylabel("Network Index")
     plt.tight_layout()
     plt.savefig(f'{output_path}/dist.png', dpi=250)
-    np.save(f'{output_path}/distance_matrix.npy', distmat)
     print(f"Saving to {output_path}/dist.png")
     plt.close()
 
@@ -83,14 +97,14 @@ def visualize_coordinates_all(coords, network_names, output_path, experiments):
 
     for e in range(len(experiments)):
         selected_coords = coords[e*n_networks: (e+1)*n_networks]
-        selected_network_names = network_names[e*n_networks: (e+1)*n_networks]
+        # selected_network_names = network_names[e*n_networks: (e+1)*n_networks]
         plt.scatter(selected_coords[:, 0], selected_coords[:, 1], s=150, c=range(len(selected_coords)), marker=markers[e])
         plt.plot(selected_coords[:, 0], selected_coords[:, 1], color='gray', alpha=0.5, linestyle='--')
 
-        for i, name in enumerate(selected_network_names):
-            name = '.'.join(name.split('.')[1:])
-            text = plt.text(selected_coords[i, 0], selected_coords[i, 1]+ 0.03, name, fontsize=8, ha='center', va='center')
-            texts.append(text)
+        # for i, name in enumerate(selected_network_names):
+        #     name = '.'.join(name.split('.')[1:])
+        #     text = plt.text(selected_coords[i, 0], selected_coords[i, 1]+ 0.03, name, fontsize=8, ha='center', va='center')
+        #     texts.append(text)
 
     for i in range(len(experiments)):
         plt.scatter([], [], marker=markers[i], color='gray', label=experiments[i])
@@ -100,7 +114,8 @@ def visualize_coordinates_all(coords, network_names, output_path, experiments):
     plt.xlabel("MDS Dimension 1")
     plt.ylabel("MDS Dimension 2")
     plt.colorbar()
-    plt.legend()
+    # plt.legend(loc="center left", bbox_to_anchor=(1.0, 0.5))
+    plt.tight_layout()
     plt.savefig(f'{output_path}/mds_embedding.png')
     print(f"Saving to {output_path}/mds_embedding.png")
     plt.close()
@@ -198,8 +213,6 @@ def visualize_distance_matrices(dist_matrix_path, sample_sizes, seeds, i=0, j=1)
 def show_cifar_images(cutout_sizes, sigmas, config, args, device):
     n_rows = len(cutout_sizes)
     n_cols = len(sigmas)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3 * n_cols, 3 * n_rows))
-    fig.subplots_adjust(wspace=0.05, hspace=0.05)
 
     normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
                                      std=[0.2023, 0.1994, 0.2010])
@@ -215,6 +228,12 @@ def show_cifar_images(cutout_sizes, sigmas, config, args, device):
     )
     base_images, _ = next(iter(base_loader))
     base_image = base_images[1].unsqueeze(0).to(device)
+    plt.imshow(base_image[0].permute(1, 2, 0).cpu().numpy())
+    plt.savefig('clean_image.png', dpi=200)
+    plt.close()
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3 * n_cols, 3 * n_rows))
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
 
     for i, c in enumerate(cutout_sizes):
         for j, s in enumerate(sigmas):

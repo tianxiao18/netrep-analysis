@@ -2,10 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-raw_data = np.array(np.load("/mnt/home/the10/ceph/results/netrep/results_aggregated/avgpool_origin.npz")['arr_0'].astype('float64'))
+raw_data = np.array(np.load("/mnt/home/the10/ceph/results/netrep/results_aggregated/avgpool.npz")['arr_0'].astype('float64'))
 aug1 = (4, 8, 12, 16, 20, 24)
-aug2 = (0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0)
-
+# aug2 = (0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0)
+aug2 = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 def center_scale(X):
     Xc = X - np.mean(X, axis=0, keepdims=True)
     return Xc / np.linalg.norm(Xc)

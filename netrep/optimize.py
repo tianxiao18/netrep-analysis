@@ -47,6 +47,7 @@ def get_lr_scheduler(optimizer, warmup_epochs, total_epochs):
 def get_onecycle_lr_scheduler(optimizer, steps_per_epoch, warmup_epochs, args, pct_start=0.1, div_factor=25.0, final_div_factor=1e4):
     if warmup_epochs and warmup_epochs > 0:
         pct_start = min(0.9, max(0.01, warmup_epochs / float(args.epochs)))
+    momentum_flag = False if args.model == 'vit' else True
 
     return torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -56,7 +57,8 @@ def get_onecycle_lr_scheduler(optimizer, steps_per_epoch, warmup_epochs, args, p
         pct_start=pct_start,          
         anneal_strategy="cos",
         div_factor=div_factor,        # initial_lr = max_lr/div_factor
-        final_div_factor=final_div_factor    # final_lr = initial_lr/final_div_factor
+        final_div_factor=final_div_factor,    # final_lr = initial_lr/final_div_factor
+        cycle_momentum=momentum_flag
     )
 
 def train(model, dataloader, criterion, optimizer, lr_scheduler, device):

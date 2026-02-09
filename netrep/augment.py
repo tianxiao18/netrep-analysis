@@ -28,26 +28,46 @@ class AugmentationPipeline:
         self.dataset = self.config.get("dataset", "imagenet")
         self.img_size = 224 if self.dataset=='imagenet' else 32
 
-        # original imagenet config
-        if self.config.get("crop", False):  
-            if self.dataset.lower() == 'imagenet':
-                self.transforms.append(T.RandomResizedCrop(self.img_size))
-            elif self.dataset.lower() == 'cifar10':
-                size = self.img_size if self.img_size <= 64 else 32
-                self.transforms.append(T.RandomCrop(size, padding=4, padding_mode="reflect"))
+        self.to_224 = self.config.get("to_224", False)
+
+        if self.to_224:
+            # ImageNet-style geometry for BOTH imagenet and cifar10 sources
+            self.transforms.append(T.Resize(256))
+            self.transforms.append(T.CenterCrop(224))
+        else:
+            # Native resolution pipelines
+            if self.config.get("crop", False):  
+                if self.dataset.lower() == 'imagenet':
+                    self.transforms.append(T.RandomResizedCrop(self.img_size))
+                elif self.dataset.lower() == 'cifar10':
+                    size = self.img_size if self.img_size <= 64 else 32
+                    self.transforms.append(T.RandomCrop(size, padding=4, padding_mode="reflect"))
+
+        self.extra_crop_scale = self.config.get("extra_crop_scale", None)
+        if self.extra_crop_scale is not None:
+            self.transforms.append(T.RandomResizedCrop(32, scale=(self.extra_crop_scale, 1.0), ratio=(1.0, 1.0)))
 
         if self.config.get("flip", False):
             self.transforms.append(T.RandomHorizontalFlip(p=1.0))
 
         # Geometric: Random affine transform
-        if config.get("affine", False):
-            self.transforms.append(T.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1)))
+        degrees = self.config.get("rot_deg", None)
+        shear   = self.config.get("shear_deg", None)
+
+        if degrees is not None or shear is not None:
+            self.transforms.append(
+                T.RandomAffine(degrees=float(degrees or 0.0), shear=float(shear or 0.0))
+            )
 
         # Photometric: Color jitter
-        self.color_jitter_strength = config.get("cj_strength", None)
-        if config.get("cj_strength", False):
+        self.color_jitter_strength = self.config.get("cj_strength", None)
+        if self.color_jitter_strength is not None:
             self.transforms.append(T.ColorJitter(
                 brightness=self.color_jitter_strength, contrast=self.color_jitter_strength, saturation=self.color_jitter_strength, hue=self.color_jitter_strength/4))
+        
+        gray_prob = self.config.get("gray_prob", None)
+        if gray_prob is not None:
+            self.transforms.append(T.RandomGrayscale(p=float(gray_prob)))
 
         self.to_tensor = T.ToTensor()
 
@@ -58,18 +78,19 @@ class AugmentationPipeline:
         self.normalize = T.Normalize(mean=mean, std=std)
 
         # Noise: Random blurring & salt and pepper noise
-        self.blur_mode = config.get("blur", None)
+        self.blur_mode = self.config.get("blur", None)
         self.blur_handlers = {
             "fixed_blur": self._apply_fixed_blur,
             "strong_random_blur": self._apply_strong_random_blur,
             "weak_random_blur": self._apply_weak_random_blur
         }
 
-        self.sp_noise_prob = config.get("sp_prob", None)
+        self.sp_noise_prob = self.config.get("sp_prob", None)
+        self.noise_std = self.config.get("noise_std", None)
 
         # Occlusion: Cutout
-        self.cutout_patch_size = config.get("cutout_patch_size", None)
-        self.sigma = config.get("sigma", None)
+        self.cutout_patch_size = self.config.get("cutout_patch_size", None)
+        self.sigma = self.config.get("sigma", None)
 
 
     def __call__(self, img):
@@ -88,12 +109,24 @@ class AugmentationPipeline:
         if self.sp_noise_prob:
             img = self.add_salt_and_pepper_noise(img, prob=self.sp_noise_prob)
 
+        if self.noise_std:
+            img = self.add_gaussian_noise(img, std=self.noise_std)
+
         # Cutout (occlusion)
         if self.cutout_patch_size:
-            img = self.random_cutout(img, patch_size=int(self.cutout_patch_size), sigma=self.sigma)
+            _, h, w = img.shape
+            ps = self._scaled_cutout_size(h, w)
+            img = self.random_cutout(img, patch_size=ps, sigma=self.sigma)
 
         return self.normalize(img)
     
+    def _scaled_cutout_size(self, h, w):
+        s = self.cutout_patch_size
+        if self.to_224:
+            scale = w / 32.0
+            return max(1, int(round(s * scale)))
+        return int(s)
+
     # --- Blur methods ---
     def _apply_fixed_blur(self, img):
         sigma = self.config.get("sigma", None)
@@ -122,6 +155,10 @@ class AugmentationPipeline:
         noisy[salt_mask] = 1.0
         noisy[pepper_mask] = 0.0
         return noisy
+    
+    def add_gaussian_noise(self, img, std=0.1):
+        noisy = img + torch.randn_like(img) * std
+        return noisy.clamp(0.0, 1.0)
 
     # --- Occlusion ---
     def random_cutout(self, img, patch_size, sigma=None):

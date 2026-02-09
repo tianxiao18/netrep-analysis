@@ -3,6 +3,7 @@ import torch
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, Subset
+import torch.nn.functional as F
 from collections import defaultdict
 from collections import OrderedDict
 import torch.nn as nn
@@ -13,7 +14,7 @@ import numpy as np
 
 class LayerActivityExtractor:
     def __init__(self, checkpoint_path, image_folder, batch_size=256, 
-                num_workers=32, device='cuda', test_size=1000, seed=42, model_name="resnet50", dataset="imagenet"):
+                num_workers=32, device='cuda', test_size=1000, seed=42, model_name="resnet50", dataset="imagenet", pretrained=False):
         self.checkpoint_path = checkpoint_path
         self.image_folder = image_folder
         self.batch_size = batch_size
@@ -24,9 +25,11 @@ class LayerActivityExtractor:
         # Load model
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
         
-        self.model = get_model(self.device, model_name)
+        self.model = get_model(self.device, model_name, pretrained=pretrained)
+        self.model_name = model_name
         self.model.load_state_dict(checkpoint)
         self.model.eval().to(self.device)
+        self.pretrained = pretrained
         if isinstance(self.model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
             self.model = self.model.module
         
@@ -64,7 +67,17 @@ class LayerActivityExtractor:
             ds = datasets.ImageFolder(image_folder, transform=transform)
             labels = [sample[1] for sample in ds.imgs]
             return transform, ds, labels
-        
+        elif dataset == "cifar10" and self.pretrained:
+            transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+            ds = datasets.CIFAR10(image_folder, train=False, transform=transform, download=True)
+            labels = ds.targets
+            return transform, ds, labels
         elif dataset == "cifar10":
             transform = transforms.Compose([
                 transforms.ToTensor(),
@@ -77,15 +90,49 @@ class LayerActivityExtractor:
         else:
             raise ValueError(f"Unknown dataset_kind: {self.dataset}")
 
+    def _build_postprocess(self):
+        post = {}
+
+        if self.model_name == "densenet":
+            # norm5 -> relu -> GAP -> (B, C)
+            def densenet_penultimate(feats):
+                feats = F.relu(feats, inplace=False)
+                feats = F.adaptive_avg_pool2d(feats, (1, 1)).flatten(1)
+                return feats
+
+            post["penultimate_norm_out"] = densenet_penultimate
+
+        return post
+
     def _get_layers_by_type(self, model):
         """
         Returns a dict {layer_name: layer_module} for all layers of the specified types.
         """
         layers = {}
-        for i in range(3, 5):
-            stage = getattr(model, f"layer{i}", None)
-            if stage is not None and len(stage) > 0:
-                layers[f"layer{i}.{len(stage)-1}"] = stage[-1] 
+        if self.model_name == "resnet18" or self.model_name == "resnet50" or self.model_name == "resnet":
+            for i in range(3, 5):  # layer2..layer4
+                stage = getattr(model, f"layer{i}", None)
+                if stage is not None and len(stage) > 0:
+                    layers[f"layer{i}.{len(stage)-1}"] = stage[-1]
+
+        elif self.model_name == "vgg":
+            # choose 3 pools spread across depth: pool1, pool3, pool5
+            pool_idxs = [i for i, m in enumerate(model.features) if isinstance(m, nn.MaxPool2d)]
+            chosen = [pool_idxs[0], pool_idxs[2], pool_idxs[4]]
+            for j, idx in enumerate(chosen, 1):
+                layers[f"features.pool{j}_out"] = model.features[idx]
+
+        elif self.model_name == "vit":
+            block_idxs = [2, 5, 8]
+            for j, idx in enumerate(block_idxs, 1):
+                layers[f"blocks.block{j}_out"] = model.blocks[idx]
+            layers["penultimate_norm_out"] = model.norm
+
+        elif self.model_name == "densenet":
+            layers["features.denseblock1_out"] = model.features.denseblock1
+            layers["features.denseblock2_out"] = model.features.denseblock2
+            layers["features.denseblock3_out"] = model.features.denseblock3
+            layers["penultimate_norm_out"] = model.features.norm5
 
         if hasattr(model, "avgpool"):
             layers["avgpool"] = model.avgpool
@@ -99,8 +146,10 @@ class LayerActivityExtractor:
 
     def _hook_factory(self, name):
         def hook(module, input, output):
-            # self.features[name].append(output.detach().cpu())
-            self._batch_feats[name] = output.detach().to(dtype=torch.float16, device="cpu")
+            feats = output.detach()
+            fn = self._build_postprocess().get(name, None)
+            feats = fn(feats) if fn is not None else feats
+            self._batch_feats[name] = feats.to(dtype=torch.float16, device="cpu")
         return hook
     
     def get_layer_names(self):

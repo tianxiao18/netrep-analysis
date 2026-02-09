@@ -97,6 +97,12 @@ def parse_args():
         default=None
     )
 
+    parser.add_argument(
+        "--aug_type",
+        type=str,
+        default="cutout"
+    )
+
 
     return parser.parse_args()
 
@@ -275,7 +281,7 @@ def extract_activity_all(experiment_ls, base_path, args):
     print(base_path, experiment_ls[0])
     network_names = LayerActivityExtractor(checkpoint_path=f'{base_path}/experiments/{experiment_ls[0]}/checkpoints/final_model.pth',
         image_folder=args.data_path,batch_size=args.batch_size, num_workers=args.num_workers,test_size=args.test_size, 
-        model_name=args.model_name, dataset=args.dataset
+        model_name=args.model_name, dataset=args.dataset, pretrained=args.pretrained
     ).get_layer_names()
 
     for exp in experiment_ls:
@@ -300,7 +306,8 @@ def extract_activity_all(experiment_ls, base_path, args):
                 num_workers=args.num_workers,
                 test_size=args.test_size,
                 model_name=args.model_name,
-                dataset=args.dataset
+                dataset=args.dataset,
+                pretrained=args.pretrained
             )
             network_names = extractor.get_layer_names()
             activities = extractor.get_activities()
@@ -315,40 +322,41 @@ def extract_activity_all(experiment_ls, base_path, args):
 def extract_raw_activity(experiment_ls, base_path, args, n_aug1, n_aug2):
     network_names = LayerActivityExtractor(checkpoint_path=f'{base_path}/experiments/{experiment_ls[-1]}/checkpoints/final_model.pth',
         image_folder=args.data_path,batch_size=args.batch_size, num_workers=args.num_workers,test_size=args.test_size, 
-        model_name=args.model_name, dataset=args.dataset
-    ).get_layer_names()[-2:]
+        model_name=args.model_name, dataset=args.dataset, pretrained=args.pretrained
+    ).get_layer_names()
     X_all = {name: [] for name in network_names}
 
     for exp in experiment_ls:
         output_path = f'{base_path}/experiments/{exp}'
         save_path = f'{base_path}/experiments/{exp}/results/activities_raw.npz'
 
-        if os.path.isfile(save_path):
-            print(f"Loading raw activities from {save_path}")
-            with np.load(save_path, allow_pickle=False) as data:
-                pca_activities = {k: data[k] for k in data.files}
+        # if os.path.isfile(save_path):
+        #     print(f"Loading raw activities from {save_path}")
+        #     with np.load(save_path, allow_pickle=False) as data:
+        #         pca_activities = {k: data[k] for k in data.files}
 
-        else:
-            print(f"Extracting raw activities to {save_path}")
-            extractor = LayerActivityExtractor(
-                checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
-                image_folder=args.data_path,
-                batch_size=args.batch_size, 
-                num_workers=args.num_workers,
-                test_size=args.test_size,
-                model_name=args.model_name,
-                dataset=args.dataset
-            )
-            activities = extractor.get_activities()
-            
-            pca_activities = {}
-            for key in list(activities.keys())[-2:]:
-                X = np.load(activities[key], mmap_mode="r")
-                X = X.astype(np.float32).reshape(X.shape[0], -1)
-                pca_activities[key] = X
-                print(key, X.shape)
+        # else:
+        print(f"Extracting raw activities to {save_path}")
+        extractor = LayerActivityExtractor(
+            checkpoint_path=f'{output_path}/checkpoints/{args.model}.pth',
+            image_folder=args.data_path,
+            batch_size=args.batch_size, 
+            num_workers=args.num_workers,
+            test_size=args.test_size,
+            model_name=args.model_name,
+            dataset=args.dataset,
+            pretrained=args.pretrained
+        )
+        activities = extractor.get_activities()
+        
+        pca_activities = {}
+        for key in list(activities.keys()):
+            X = np.load(activities[key], mmap_mode="r")
+            X = X.astype(np.float32).reshape(X.shape[0], -1)
+            pca_activities[key] = X
+            print(key, X.shape)
 
-            np.savez_compressed(save_path, **pca_activities)
+            # np.savez_compressed(save_path, **pca_activities)
 
         for name in network_names:
             X = pca_activities[name].reshape(pca_activities[name].shape[0], -1)
@@ -358,7 +366,9 @@ def extract_raw_activity(experiment_ls, base_path, args, n_aug1, n_aug2):
     os.makedirs(output_path, exist_ok=True)
     for name, arr_ls in X_all.items():
         X_concat = np.stack(arr_ls, axis=0)
-        X_concat = X_concat.reshape(n_aug1, n_aug2, X_concat.shape[-2], X_concat.shape[-1])
+        print(X_concat.shape, n_aug1, n_aug2)
+        if X_concat.shape[0] == n_aug1 * n_aug2:
+            X_concat = X_concat.reshape(n_aug1, n_aug2, X_concat.shape[-2], X_concat.shape[-1])
         print(X_concat.shape)
         np.savez_compressed(f'{output_path}/{name}.npz', X_concat)
 
@@ -380,6 +390,22 @@ def exp_to_name(exp_ls):
             words = exp.split('/')[-1].split('_')
             param_ls.append(words[-2])
             name_ls.append(f'C={words[-2]}, s={words[-1]}')
+            continue
+        if 'rot_deg' in exp and '0.0' not in exp:
+            words = exp.split('/')[-1].split('_')
+            param_ls.append(words[-3])
+            name_ls.append(f'r={words[-2]}, s={words[-1]}')
+            continue
+        if len(exp.split('/')[-2].split('_')) == 1 or 'weak_random_blur' in exp or 'sp_noise' in exp or 'noise_std' in exp:
+            words = exp.split('/')[-1].split('_')
+            param_ls.append(words[-2])
+            if words[-3] in symbol_map:
+                 name_ls.append(f'{symbol_map[words[-3]]}={words[-2]}')
+            elif 'clean' in words:
+                name_ls.append('clean=0.0')
+            else:
+                aug_name = '_'.join(words[-4:-2])
+                name_ls.append(f'{aug_name}={words[-2]}')
             continue
         if len(exp) > 60:
             symbol = 'combined'
@@ -478,31 +504,55 @@ def comparison(path1, path2, args):
     plt.title('Layer-wise differences between checkpoints')
     fig.tight_layout()
     plt.savefig('reproduce_check.png')
-        
+
+def get_experiments_name_all_aug(model_name, param_dict):
+    experiment_ls = [f"clean/exp_{model_name}_{param_dict['clean']}_0.0_0.0"]
+    experiment_ls += [f"rotate/exp_{model_name}_{param_dict['rotate']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
+    experiment_ls += [f"sheer/exp_{model_name}_{param_dict['sheer']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
+    experiment_ls += [f"jitter/exp_{model_name}_{param_dict['jitter']}_{c}_0.0" for c in [0.1, 0.2, 0.3, 0.4]]
+    experiment_ls += [f"grayscale/exp_{model_name}_{param_dict['grayscale']}_{c}_0.0" for c in [0.1, 0.2, 0.3, 0.4]]
+    experiment_ls += [f"gaussian_noise/exp_{model_name}_{param_dict['gaussian_noise']}_{c}_0.0" for c in [0.01, 0.02, 0.03, 0.04]]
+    experiment_ls += [f"sp_noise/exp_{model_name}_{param_dict['sp_noise']}_{c}_0.0" for c in [0.05, 0.1, 0.15, 0.2]]
+    experiment_ls += [f"cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
+    experiment_ls += [f"crop/exp_{model_name}_{param_dict['crop']}_{c}_0.0" for c in [0.6, 0.7, 0.8, 0.9]]
+    return experiment_ls
+            
 
 def main():
     args = parse_args()
     set_seed(42)
 
     base_path = '/mnt/home/the10/ceph/results/netrep'
-    output_path = f'{base_path}/experiments/{args.experiment}'
+    output_path = f'{base_path}/experiments/{args.experiment}/{args.aug_type}'
     result_path = f'{output_path}/results_seed{args.seed}' if args.seed else f'{output_path}/results'
     result_path = f'{result_path}_pretrained' if args.pretrained else result_path
+    result_path = f'{result_path}_{args.model_name}' if args.model_name != 'resnet18' else result_path
     result_path = f'{result_path}/{args.model}' if args.model != 'final_model' else result_path
     embed_path = f'{result_path}/activities.npz'
     print(result_path)
     print(args.dataset, args.model_name)
 
+    param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
+                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean",
+                  "cutout_jitter": "cutout_patch_size", "cutout_crop": "cutout_patch_size", "rot_sheer": "rot_deg",
+                  "rotate": "rot_deg", "sheer": "shear_deg","gaussian_noise": "noise_std",
+                  "jitter": "cj_strength", "grayscale": "gray_prob",
+                  "cutout_only": "cutout_patch_size", "crop": "extra_crop_scale"}
+
     os.makedirs(result_path, exist_ok=True)
     pretrain_str = "/pretrained" if args.pretrained else ""
     pretrain_str = f"{pretrain_str}_seed{args.seed}" if args.seed else pretrain_str
-    # experiment_ls = [f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_0.0_0.0"]
-    experiment_ls = [f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
-    # experiment_ls = ["clean/exp_wide_resnet_clean_0.0"]+[f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}" for c in [12.0, 16.0, 20.0, 24.0] for s in [0.2, 0.3, 0.5, 0.8, 1.0]]
-    # experiment_ls += [f"cutout_seed43/exp_wide_resnet_cutout_patch_size_16.0_0.5"]
-    # experiment_ls += [f"cutout_seed44/exp_wide_resnet_cutout_patch_size_16.0_0.5"]
 
-    # distance_vs_sample_size(args, output_path)
+    aug1_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
+    aug2_param = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
+    # aug2_param = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    # aug2_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
+    model_name = "resnet" if args.model_name == 'resnet50' else args.model_name
+    if args.aug_type == "combined":
+        experiment_ls = get_experiments_name_all_aug(model_name, param_dict)
+    else:
+        experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
+
     # dist_matrix_path = "/mnt/home/the10/ceph/results/netrep/experiments/clean/distance_matrix_pc_all.npy"
     # visualize_distance_matrices(dist_matrix_path, sample_sizes=[10, 20, 50, 100, 200, 500, 1000], seeds=[42, 43, 44, 45, 46])
     # comparison('/mnt/home/the10/ceph/results/netrep/experiments/clean/checkpoints/final_model.pth', '/mnt/home/the10/ceph/results/netrep/experiments/clean_seed43/checkpoints/final_model.pth', args)
@@ -517,7 +567,8 @@ def main():
             num_workers=args.num_workers,
             test_size=args.test_size,
             model_name=args.model_name,
-            dataset=args.dataset
+            dataset=args.dataset,
+            pretrained=args.pretrained
         )
         network_names = extractor.get_layer_names()
         print(network_names)
@@ -539,6 +590,7 @@ def main():
     else:
         X_train, X_test, network_names = extract_activity_all(experiment_ls, base_path, args)
         # extract_raw_activity(experiment_ls, base_path, args, n_aug1=7, n_aug2=7)
+        # exit()
 
     # compute procruste's distance between pair of networks
     if not os.path.isfile(f"{result_path}/distance_matrix.npy"):
@@ -553,6 +605,11 @@ def main():
     else:
         distmat = np.load(f"{result_path}/distance_matrix.npy")
     print(len(X_train),len(X_train[0]), distmat.shape)
+
+    # compute diff norms from origin to each augmented shape
+    # origin_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_0.0_0.0"]
+    # X_train_origin, _, network_names = extract_activity_all(origin_ls, base_path, args)
+    # compute_diff_norms(X_train, X_train_origin)
 
     if 'all' in args.experiment:
         l = len(network_names) // len(experiment_ls)
@@ -570,6 +627,7 @@ def main():
 
     pca = PCA(n_components=2, random_state=42)
     coordinates = pca.fit_transform(Z)
+    print(f"variance explained in 2 dim: {np.sum(pca.explained_variance_ratio_)}")
     if 'all' in args.experiment:
         visualize_coordinates_all(coordinates, network_names, result_path, name_ls)
         visualize_layer_aligned(coordinates, network_names, result_path, name_ls, mds_dim=0)

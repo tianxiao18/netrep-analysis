@@ -115,7 +115,7 @@ def parse_args():
     parser.add_argument(
         "--op_param",
         type=float,
-        default=0.5
+        default=0.0
     )
 
     parser.add_argument(
@@ -142,22 +142,30 @@ def set_seed(seed=42):
 def main():
     args = parse_args()
     set_seed(args.seed)
-    warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
+    # warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
+    warmup_epochs = args.warmup_epochs
     param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
                   "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean",
-                  "cutout_jitter": "cutout_patch_size"}
+                  "cutout_jitter": "cutout_patch_size", "cutout_crop": "cutout_patch_size", "rot_sheer": "rot_deg",
+                  "rotate": "rot_deg", "sheer": "shear_deg", "gaussian_noise": "noise_std",
+                  "jitter": "cj_strength", "grayscale": "gray_prob",
+                  "cutout_only": "cutout_patch_size", "crop": "extra_crop_scale"}
     param_name = param_dict[args.aug_type]
     print(args.aug_type, args.aug_param, args.seed, args.checkpoint)
 
     print("Setting up dataloader...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    config = {"crop": True, "flip": True, param_name: args.aug_param, "dataset": args.dataset}  # crop has to be true to ensure same shape input
+    # here crop has to be true to ensure same shape input
+    # if pretrained, we have to scale image to 224 to avoid changing pretrained weights
+    config = {"crop": True, "flip": True, param_name: args.aug_param, "dataset": args.dataset, "to_224": args.pretrained}
     if "blur" in args.aug_type: config["blur"] = args.aug_type
-    if "cutout" in args.aug_type: config["sigma"] = args.op_param
-    if "cutout_jitter" in args.aug_type: config["cj_strength"] = args.op_param
-    
-    if args.dataset == 'imagenet':
+    if args.aug_type == "cutout": config["sigma"] = args.op_param
+    if args.aug_type == "cutout_jitter": config["cj_strength"] = args.op_param
+    if args.aug_type == "cutout_crop": config["extra_crop_scale"] = args.op_param
+    if args.aug_type == "rot_sheer": config["shear_deg"] = args.op_param
+
+    if args.dataset == 'imagenet' or args.pretrained:
         mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
         image_crop = [transforms.Resize(256),transforms.CenterCrop(224)]
     elif args.dataset == 'cifar10':
@@ -180,12 +188,19 @@ def main():
     model = get_model(device, model_name=args.model, checkpoint=args.checkpoint, pretrained=args.pretrained)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
-    optimizer = optim.SGD(
-        model.parameters(),
-        lr=args.base_lr * (args.batch_size / 256),
-        momentum=args.momentum,
-        weight_decay=args.weight_decay
-    )
+    if args.model == 'vit':
+        optimizer = optim.AdamW(
+            params=model.parameters(),
+            lr=args.base_lr * (args.batch_size / 256),
+            weight_decay=args.weight_decay
+        )
+    else:
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=args.base_lr * (args.batch_size / 256),
+            momentum=args.momentum,
+            weight_decay=args.weight_decay
+        )
     # lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
     lr_scheduler = get_onecycle_lr_scheduler(optimizer, len(train_loader), warmup_epochs, args)
 

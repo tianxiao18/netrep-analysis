@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import seaborn as sns
 from tqdm import tqdm
 from adjustText import adjust_text
@@ -238,7 +239,7 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path):
 
         vmax = max(np.max(masked_selected_distmat), vmax)
         vmin = min(np.min(masked_selected_distmat), vmin)
-
+    vmin, vmax = 0.35, 0.85
     row, col = 1, 4
     fig, axes = plt.subplots(row, col, figsize=(col*5, row*4), gridspec_kw={'wspace': 0, 'hspace': 0})
     axes = axes.flatten()
@@ -277,7 +278,7 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path):
             ax.set_xticklabels([])
 
     plt.tight_layout()
-    plt.savefig(f'{output_path}/dist.png')
+    plt.savefig(f'{output_path}/dist.png', dpi=200)
     np.save(f'{output_path}/distance_matrix.npy', distmat)
     print(f"Saving to {output_path}/dist.png")
     plt.close()
@@ -307,7 +308,7 @@ def visualize_coordinates_2d(coord_list, layer_names, network_names, output_path
     s_to_idx = {s: i for i, s in enumerate(s_vals)}
 
     color_values = np.linspace(0.3, 1.0, len(C_vals))
-    C_colors = [cm.Purples(color_values), cm.Blues(color_values), cm.Greens(color_values), cm.Oranges(color_values)]
+    C_colors = [cm.Purples(color_values), cm.Blues(color_values), cm.Oranges(color_values), cm.Greens(color_values)]
     base_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
     s_shapes = list(itertools.islice(itertools.cycle(base_shapes), len(s_vals)))
 
@@ -342,8 +343,8 @@ def visualize_coordinates_2d(coord_list, layer_names, network_names, output_path
 
             title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
             ax.set_title(title)
-            ax.set_xlabel("MDS Dimension 1")
-            ax.set_ylabel("MDS Dimension 2")
+            ax.set_xlabel("PC Dimension 1")
+            ax.set_ylabel("PC Dimension 2")
 
             for spine in ['top', 'right']:
                 ax.spines[spine].set_visible(False)
@@ -363,6 +364,32 @@ def visualize_coordinates_2d(coord_list, layer_names, network_names, output_path
             
     ax.legend(fontsize=8, labelspacing=0.8, frameon=False)
 
+    # --- s legend (markers)
+    # s_handles = [
+    #     mlines.Line2D(
+    #         [], [], color="black", marker=s_shapes[i],
+    #         ls="None", ms=10, label=f"s={val}"
+    #     )
+    #     for i, val in enumerate(s_vals)
+    # ]
+
+    # ax.legend(
+    #     handles=s_handles,
+    #     title="s",
+    #     loc="lower left",
+    #     bbox_to_anchor=(1.02, 0.0),
+    #     frameon=True
+    # )
+
+    # sm = plt.cm.ScalarMappable(
+    #     cmap='Greens',
+    #     norm=plt.Normalize(vmin=min(C_vals), vmax=max(C_vals))
+    # )
+    # sm.set_array([])
+
+    # cbar = plt.colorbar(sm, ax=ax, fraction=0.04, pad=0.02, shrink=0.6)
+    # cbar.set_label("C")
+
     handles = (
         [mpatches.Patch(color=C_colors[-1][i], label=f"C={val}") for i, val in enumerate(C_vals)] +
         [mlines.Line2D([], [], color="black", marker=s_shapes[i],
@@ -371,7 +398,7 @@ def visualize_coordinates_2d(coord_list, layer_names, network_names, output_path
     ax.legend(handles=handles, bbox_to_anchor=(1.02, 0.5), loc="center left")
 
     plt.tight_layout()
-    plt.savefig(f'{output_path}/mds_embedding.png')
+    plt.savefig(f'{output_path}/mds_embedding.png', dpi=200)
     print(f"Saved to {output_path}/mds_embedding.png")
     plt.close()
 
@@ -409,15 +436,15 @@ def main():
     dist_list = []
     coord_list = []
     os.makedirs(f'{output_path}/results_seed_combined', exist_ok=True)
-    network_indices = [3.1, 4.1]
-    layer_names = [f'module.layer{i}' for i in network_indices] + ['avgpool', 'fc']
+    layer_names = [f'stage {i}' for i in range(1, 5)]
     network_names = exp_to_name(experiment_ls)[0]
+    os.makedirs(f'{output_path}/results_seed_combined_{args.model_name}', exist_ok=True)
 
     for l in range(num_layers):
         indices = np.arange(l, len(all_Xs), num_layers)
         print(len(all_Xs), indices)
 
-        distmat_path = f'{output_path}/results_seed_combined/distance_matrix_layer{l}.npy'
+        distmat_path = f'{output_path}/results_seed_combined_{args.model_name}/distance_matrix_layer{l}.npy'
         if not os.path.isfile(distmat_path):
             selected_distmat = compute_layer_distmat(all_Xs, all_Xs, indices)
             np.save(distmat_path, selected_distmat)
@@ -429,7 +456,9 @@ def main():
         embedding = MDS(
             n_components=550,
             metric=True,
-            eps=1e-5,
+            n_init=20,
+            max_iter=5000,
+            eps=1e-6,
             normalized_stress="auto",
             dissimilarity="precomputed",
             random_state=42,
@@ -440,8 +469,8 @@ def main():
         coordinates = PCA(n_components=2, random_state=42).fit_transform(Z)
         coord_list.append(coordinates)
         
-    visualize_distance_all(dist_list, layer_names, ['']*len(selected_distmat), f'{output_path}/results_seed_combined')
-    visualize_coordinates_2d(coord_list, layer_names, network_names, f'{output_path}/results_seed_combined')
+    visualize_distance_all(dist_list, layer_names, ['']*len(selected_distmat), f'{output_path}/results_seed_combined_{args.model_name}')
+    visualize_coordinates_2d(coord_list, layer_names, network_names, f'{output_path}/results_seed_combined_{args.model_name}')
 
 if __name__ == "__main__":
     main()
