@@ -57,7 +57,6 @@ source ~/netrep-analysis/venv/bin/activate
 #     done
 # done
 
-# train from scratch
 python scripts/resnet.py \
     --aug_type=${AUG_TYPE} \
     --aug_param=0.0 \
@@ -65,12 +64,13 @@ python scripts/resnet.py \
     --model=${MODEL} \
     --dataset=cifar10 \
     --base_lr=0.01 \
-    --weight_decay=0.01 \
-    --warmup_epochs=5 \
+    --weight_decay=1e-4 \
+    --warmup_epochs=0 \
     --momentum=0.9 \
-    --epochs=100 \
+    --epochs=20 \
     --data_path=/mnt/home/the10/ceph/dataset/cifar10 \
-    --seed=44
+    --seed=42 \
+    --pretrained
 
 for AUG_PARAM in 4.0 8.0 10.0 12.0 16.0 20.0 24.0; do
     for OP_PARAM in 0.05 0.1 0.2 0.3 0.5 0.8 1.0; do
@@ -82,11 +82,12 @@ for AUG_PARAM in 4.0 8.0 10.0 12.0 16.0 20.0 24.0; do
             --model=${MODEL} \
             --dataset=cifar10 \
             --base_lr=0.01 \
-            --weight_decay=0.01 \
-            --warmup_epochs=5 \
+            --weight_decay=1e-4 \
+            --warmup_epochs=0 \
             --momentum=0.9 \
-            --epochs=100 \
+            --epochs=20 \
             --data_path=/mnt/home/the10/ceph/dataset/cifar10 \
-            --seed=44
+            --seed=42 \
+            --pretrained
     done
 done
