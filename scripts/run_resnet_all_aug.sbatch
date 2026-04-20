@@ -44,27 +44,73 @@ source ~/netrep-analysis/venv/bin/activate
 #     --data_path=/mnt/home/the10/ceph/dataset/cifar10 \
 #     --seed=42
 
-# for AUG_PARAM in 4.0 12.0 18.0 24.0; do
-#     python scripts/resnet.py --aug_type=rotate --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
-# done
-# for AUG_PARAM in 4.0 12.0 18.0 24.0; do
-#     python scripts/resnet.py --aug_type=sheer --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
-# done
-# for AUG_PARAM in 0.1 0.2 0.3 0.4; do
-#     python scripts/resnet.py --aug_type=jitter --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
-# done
-# for AUG_PARAM in 0.03 0.05 0.08 0.1; do
-#     python scripts/resnet.py --aug_type=grayscale --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
-# done
-# for AUG_PARAM in 0.01 0.02 0.03 0.04; do
-#     python scripts/resnet.py --aug_type=gaussian_noise --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
-# done
-# for AUG_PARAM in 0.05 0.1 0.15 0.2; do
-#     python scripts/resnet.py --aug_type=sp_noise --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
-# done
-for AUG_PARAM in 4.0 5.0 6.0 7.0; do
+for AUG_PARAM in 4.0 12.0 18.0 24.0; do
+    python scripts/resnet.py --aug_type=rotate --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+for AUG_PARAM in 4.0 12.0 18.0 24.0; do
+    python scripts/resnet.py --aug_type=sheer --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+for AUG_PARAM in 0.1 0.2 0.3 0.4; do
+    python scripts/resnet.py --aug_type=jitter --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+for AUG_PARAM in 0.03 0.05 0.08 0.1; do
+    python scripts/resnet.py --aug_type=grayscale --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+for AUG_PARAM in 0.01 0.02 0.03 0.04; do
+    python scripts/resnet.py --aug_type=gaussian_noise --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+for AUG_PARAM in 0.05 0.1 0.15 0.2; do
+    python scripts/resnet.py --aug_type=sp_noise --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+for AUG_PARAM in 2.0 4.0 6.0 8.0; do
     python scripts/resnet.py --aug_type=cutout --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
 done
-# for AUG_PARAM in 0.6 0.7 0.8 0.9; do
-#     python scripts/resnet.py --aug_type=crop --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+for AUG_PARAM in 0.6 0.7 0.8 0.9; do
+    python scripts/resnet.py --aug_type=crop --data_path=/mnt/home/the10/ceph/dataset/cifar10 --aug_param=${AUG_PARAM} --model=resnet18 --dataset=cifar10 --base_lr=0.03 --weight_decay=5e-4 --momentum=0.9 --warmup_epochs=0 --epochs=100
+done
+
+# Define your augmentations and their possible parameters.
+# declare -A AUGS
+# AUGS["rotate"]="4.0 12.0 18.0 24.0"
+# AUGS["sheer"]="4.0 12.0 18.0 24.0"
+# AUGS["jitter"]="0.1 0.2 0.3 0.4"
+# AUGS["grayscale"]="0.03 0.05 0.08 0.1"
+# AUGS["gaussian_noise"]="0.01 0.02 0.03 0.04"
+# AUGS["sp_noise"]="0.05 0.1 0.15 0.2"
+# AUGS["crop"]="0.6 0.7 0.8 0.9"
+
+# AUG_NAMES=(${!AUGS[@]})
+
+# get_last_param() {
+#     local param_list=($1)
+#     echo "${param_list[-1]}"
+# }
+
+# for (( i=0; i<${#AUG_NAMES[@]}; i++ )); do
+#     for (( j=0; j<${#AUG_NAMES[@]}; j++ )); do
+#         AUG1="${AUG_NAMES[$i]}"
+#         AUG2="${AUG_NAMES[$j]}"
+#         # skip if both augmentations are the same
+#         if [ "$AUG1" == "$AUG2" ]; then
+#             continue
+#         fi
+
+#         PARAM1=$(get_last_param "${AUGS[$AUG1]}")
+#         PARAM2=$(get_last_param "${AUGS[$AUG2]}")
+
+#         echo "Running with --aug_type=${AUG1} --aug_param=${PARAM1} --aug_type2=${AUG2} --aug_param2=${PARAM2}"
+#         python scripts/resnet.py \
+#             --aug_type=${AUG1} \
+#             --aug_param=${PARAM1} \
+#             --aug_type2=${AUG2} \
+#             --aug_param2=${PARAM2} \
+#             --model=resnet18 \
+#             --dataset=cifar10 \
+#             --base_lr=0.03 \
+#             --weight_decay=5e-4 \
+#             --momentum=0.9 \
+#             --warmup_epochs=0 \
+#             --epochs=100 \
+#             --data_path=/mnt/home/the10/ceph/dataset/cifar10
+#     done
 # done

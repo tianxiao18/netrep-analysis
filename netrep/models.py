@@ -11,28 +11,28 @@ import torch.nn as nn
 #     model = torch.nn.DataParallel(model)
 #     return model.to(device)
 
-def get_model(device, model_name="resnet50", checkpoint=None, pretrained=False):
+def get_model(device, model_name="resnet50", checkpoint=None, pretrained=False, num_classes=10):
     if model_name == "vgg":
         model = models.vgg11_bn(weights=None)
         model.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        model.classifier = nn.Sequential(nn.Linear(512, 10))
+        model.classifier = nn.Sequential(nn.Linear(512, num_classes))
     elif model_name == "vit":
         if pretrained:
             model = timm.create_model(
                 "vit_tiny_patch16_224",
                 pretrained=True,
-                num_classes=10
+                num_classes=num_classes
             )
         else:
             model = timm.create_model(
                 "vit_tiny_patch16_224",
                 pretrained=False,
-                num_classes=10,
+                num_classes=num_classes,
                 img_size=32,
                 patch_size=4,
             )
     elif model_name == 'wide_resnet':
-        model = wide_resnet50_2(num_classes=10)
+        model = wide_resnet50_2(num_classes=num_classes)
         model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)  # CIFAR stem
         model.maxpool = nn.Identity()
     elif model_name == 'densenet':
@@ -47,15 +47,17 @@ def get_model(device, model_name="resnet50", checkpoint=None, pretrained=False):
             model = resnet18(weights=None)
         model.conv1.stride = (1, 1)
         model.maxpool = nn.Identity()
-        model.fc = nn.Linear(model.fc.in_features, 10)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
     else:  # ResNet50
         if pretrained:
             model = models.resnet50(weights="DEFAULT")
         else:
             model = models.resnet50(weights=None)
-            model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            model.maxpool = nn.Identity()
-        model.fc = nn.Linear(model.fc.in_features, 10)
+            if num_classes != 1000:
+                # Use CIFAR-friendly stem only for small images
+                model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                model.maxpool = nn.Identity()
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
 
     model = torch.nn.DataParallel(model)
 

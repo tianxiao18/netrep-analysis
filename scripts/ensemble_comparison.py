@@ -163,7 +163,7 @@ def get_experiments_name_all_aug(output_path, model_name, param_dict):
     experiment_ls += [f"{output_path}/grayscale/exp_{model_name}_{param_dict['grayscale']}_{c}_0.0/checkpoints/final_model.pth" for c in [0.1, 0.2, 0.3, 0.4]]
     experiment_ls += [f"{output_path}/gaussian_noise/exp_{model_name}_{param_dict['gaussian_noise']}_{c}_0.0/checkpoints/final_model.pth" for c in [0.01, 0.02, 0.03, 0.04]]
     experiment_ls += [f"{output_path}/sp_noise/exp_{model_name}_{param_dict['sp_noise']}_{c}_0.0/checkpoints/final_model.pth" for c in [0.05, 0.1, 0.15, 0.2]]
-    # experiment_ls += [f"{output_path}/cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0/checkpoints/final_model.pth" for c in [4.0, 12.0, 18.0, 24.0]]
+    experiment_ls += [f"{output_path}/cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0/checkpoints/final_model.pth" for c in [2.0, 4.0, 6.0, 8.0]]
     experiment_ls += [f"{output_path}/crop/exp_{model_name}_{param_dict['crop']}_{c}_0.0/checkpoints/final_model.pth" for c in [0.6, 0.7, 0.8, 0.9]]
     return experiment_ls
 
@@ -210,6 +210,63 @@ def plot_ensemble_heatmap(ensemble_accuracy, aug_types, n_augs):
     plt.savefig('ensemble_acc.png', dpi=200)
     plt.close()
 
+def plot_combined_accuracy_heatmap(angle_values, ensemble_values, title):
+    m, b = np.polyfit(angle_values, ensemble_values, 1)
+
+    x_line = np.linspace(angle_values.min(), angle_values.max(), 100)
+    y_line = m * x_line + b
+    r = np.corrcoef(angle_values, ensemble_values)[0, 1]
+
+    plt.figure(figsize=(5, 5))    
+    plt.scatter(angle_values, ensemble_values)
+    plt.plot(x_line, y_line, color="red", linewidth=2, label=f"Best fit (r = {r:.3f})")
+    plt.xlabel("Mean Geodesic Angle (degrees)")
+    plt.ylabel("Accuracy")
+    title_str = title.split('/')[-1]
+    plt.title(title_str)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'{title}.png', dpi=200)
+
+def permutation_test_correlation(x, y, n_permutations=10000, seed=42):
+    """
+    Tests whether the Pearson r between x and y is significant via permutation.
+
+    Returns observed r, p-value (two-tailed), and the null distribution.
+    """
+    rng = np.random.default_rng(seed)
+    mask = ~(np.isnan(x) | np.isnan(y))
+    x, y = x[mask], y[mask]
+
+    r_obs = np.corrcoef(x, y)[0, 1]
+    null = np.array([
+        np.corrcoef(rng.permutation(x), y)[0, 1]
+        for _ in range(n_permutations)
+    ])
+    p_value = np.mean(np.abs(null) >= np.abs(r_obs))
+
+    return r_obs, p_value, null
+
+
+def plot_permutation_test(x, y, title, n_permutations=10000, seed=42):
+    r_obs, p_value, null = permutation_test_correlation(x, y, n_permutations=n_permutations, seed=seed)
+
+    plt.figure(figsize=(5, 4))
+    plt.hist(null, bins=60, color="steelblue", alpha=0.7, label="Null distribution")
+    plt.axvline(r_obs,  color="red",    linewidth=2, label=f"Observed r = {r_obs:.3f}")
+    plt.axvline(-r_obs, color="red",    linewidth=2, linestyle="--")
+    plt.xlabel("Pearson r (permuted)")
+    plt.ylabel("Count")
+    title_str = title.split('/')[-1]
+    plt.title(f"{title_str}\np = {p_value} ({n_permutations:,} permutations)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{title}_permutation_test.png", dpi=200)
+    plt.close()
+    print(f"[{title}] r = {r_obs}, p = {p_value}")
+    return r_obs, p_value
+
+
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -223,6 +280,7 @@ if __name__ == "__main__":
     layer = 'layer2.1'
 
     base_path = '/mnt/home/the10/ceph/results/netrep'
+    results_path = '/mnt/home/the10/netrep-analysis/results'
     output_path = f'{base_path}/experiments'
     print(args.dataset, args.model_name)
 
@@ -237,9 +295,9 @@ if __name__ == "__main__":
     aug_types = list(dict.fromkeys(e.split('/')[-4] for e in experiment_ls[1:]))
     n_augs = len(aug_types)
 
-    angle_matrices = np.load(f"{layer}_angle_matrix.npy")
+    angle_matrices = np.load(f"{results_path}/{layer}_angle_matrix.npy")
 
-    if not os.path.isfile(f"ensemble_accuracy.npy"):
+    if not os.path.isfile(f"{results_path}/{layer}_ensemble_accuracy.npy"):
         ensemble_accuracy = np.zeros((n_augs, n_augs))
         for i in range(n_augs):
             for j in range(n_augs):
@@ -265,10 +323,32 @@ if __name__ == "__main__":
                 
                 ensemble_accuracy[i][j] = acc - sum(all_accs)/len(all_accs)
 
-        np.save("ensemble_accuracy.npy", ensemble_accuracy)
+        np.save(f"{results_path}/{layer}_ensemble_accuracy.npy", ensemble_accuracy)
     else:
-        ensemble_accuracy = np.load("ensemble_accuracy.npy")
+        ensemble_accuracy = np.load(f"{results_path}/{layer}_ensemble_accuracy.npy")
 
+    import pandas as pd
+    import seaborn as sns
+
+    # Read and process CSV for 7x7 augmentation accuracy heatmap
+    df = pd.read_csv(os.path.join(results_path, "wandb_export_2026-03-28T23_25_09.645-04_00.csv"))
+
+    aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "cutout", "crop"]
+    idx = {a: i for i, a in enumerate(aug_types)}
+    combined_accuracy = np.full((n_augs, n_augs), np.nan)
+
+    for _, r in df.iterrows():
+        # get only the two aug names used in the experiment
+        augs = [a for a in aug_types if f"_{a}_" in "_" + r["Name"] + "_"]
+        if len(augs) == 2:
+            i, j = idx[augs[0]], idx[augs[1]]
+            combined_accuracy[i, j] = combined_accuracy[j, i] = r["val_acc"]
+
+    plt.figure(figsize=(7, 6))
+    sns.heatmap(combined_accuracy, xticklabels=aug_types, yticklabels=aug_types, annot=True, cmap="viridis", fmt=".2f")
+    plt.title("Accuracy for Combined Augmentation Types")
+    plt.tight_layout()
+    plt.savefig(f"{results_path}/augmentation_pair_accuracy_heatmap.png")
 
     plot_ensemble_heatmap(ensemble_accuracy, aug_types, n_augs)
     plot_synergy_profiles(ensemble_accuracy, aug_types)
@@ -277,21 +357,11 @@ if __name__ == "__main__":
 
     angle_values = angle_matrices[:, mask].flatten()
     ensemble_values = ensemble_accuracy[mask].flatten()
+    combined_values = combined_accuracy[mask].flatten()
 
-    m, b = np.polyfit(angle_values, ensemble_values, 1)
+    plot_combined_accuracy_heatmap(angle_values, combined_values, f"{results_path}/{layer} angle vs combined accuracy")
+    plot_combined_accuracy_heatmap(angle_values, ensemble_values, f"{results_path}/{layer} angle vs ensemble accuracy")
 
-    x_line = np.linspace(angle_values.min(), angle_values.max(), 100)
-    y_line = m * x_line + b
-    r = np.corrcoef(angle_values, ensemble_values)[0, 1]
-
-    plt.figure(figsize=(5, 5))    
-    plt.scatter(angle_values, ensemble_values)
-    plt.plot(x_line, y_line, color="red", linewidth=2, label=f"Best fit (r = {r:.3f})")
-    plt.xlabel("Mean Geodesic Angle (degrees)")
-    plt.ylabel("Ensemble Accuracy")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(f'angle_vs_acc_{layer}.png', dpi=200)
-
-
+    plot_permutation_test(angle_values, combined_values, n_permutations=100000, title=f"{results_path}/{layer} angle vs combined accuracy")
+    plot_permutation_test(angle_values, ensemble_values, n_permutations=100000, title=f"{results_path}/{layer} angle vs ensemble accuracy")
 

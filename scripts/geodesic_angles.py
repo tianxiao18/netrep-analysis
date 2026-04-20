@@ -124,7 +124,7 @@ def reduce_activity(activities, n_dim=1000):
     
     reduced_activity = np.zeros((len(activities), len(activities[0]), n_dim))
 
-    for i, activity in tqdm(enumerate(activities)):
+    for i, activity in enumerate(activities):
         pca = DualPCA(n_components=n_dim)
         X = pca.fit_transform(activity)
         print(f"variance explained in {n_dim} dim: {np.sum(pca.explained_variance_ratio_)}")
@@ -135,20 +135,22 @@ def reduce_activity(activities, n_dim=1000):
 if __name__ == "__main__":
     # layers = ['layer2.1', 'layer3.1', 'layer4.1', 'avgpool']
     layers = ['layer2.1']
-    aug_names = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "crop"]
+    aug_names = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "cutout", "crop"]
     angle_matrices = np.zeros((len(layers), len(aug_names), len(aug_names)))
     n_augs = len(aug_names)
-    
+    result_path = "/mnt/home/the10/netrep-analysis/results"
+
     for k, layer in enumerate(layers):
         print("reading", layer)
-        out_npy  = f"/mnt/home/the10/ceph/results/netrep/results_aggregated/{layer}.npy"
+        in_npy  = f"/mnt/home/the10/ceph/results/netrep/results_aggregated/{layer}.npy"
+        out_npy = f"{result_path}/{layer}_angle_matrix.npy"
 
         if os.path.isfile(out_npy):
-            angle_matrices = np.load(f"{layer}_angle_matrix.npy")
+            angle_matrices = np.load(out_npy)
             angle_matrix = angle_matrices[-1]
             continue 
 
-        raw = np.load(out_npy, mmap_mode="r")
+        raw = np.load(in_npy, mmap_mode="r")
         raw_data = np.empty_like(raw)
 
         chunk = 1
@@ -163,17 +165,17 @@ if __name__ == "__main__":
         grayscale = center_scale(raw_data[13:17])
         gaussian_noise = center_scale(raw_data[17:21])
         sp_noise = center_scale(raw_data[21:25])
-        # cutout = center_scale(raw_data[25:29])
+        cutout = center_scale(raw_data[25:29])
         crop = center_scale(raw_data[29:33])
         
         shape0 = reduce_activity([shape0])[0]
 
         # compute all pairwise angles between augmentations
-        aug_list = [rotate, sheer, jitter, grayscale, gaussian_noise, sp_noise, crop]
+        aug_list = [rotate, sheer, jitter, grayscale, gaussian_noise, sp_noise, cutout, crop]
         new_aug_list = []
         n_augs = len(aug_list)
 
-        for aug_activity in aug_list:
+        for aug_activity in tqdm(aug_list, desc="Reducing activity"):
             new_aug_list.append(reduce_activity(aug_activity))
 
         angle_matrix = np.zeros((n_augs, n_augs))
@@ -192,7 +194,7 @@ if __name__ == "__main__":
 
         angle_matrices[k] = angle_matrix
 
-    np.save(f"{layer}_angle_matrix.npy", angle_matrices)
+    np.save(f"{result_path}/{layer}_angle_matrix.npy", angle_matrices)
 
     cmin = np.min(angle_matrix[np.nonzero(angle_matrix)])
     cmax = np.max(angle_matrix)
@@ -203,7 +205,7 @@ if __name__ == "__main__":
     plt.xticks(ticks=np.arange(n_augs), labels=aug_names, rotation=45)
     plt.yticks(ticks=np.arange(n_augs), labels=aug_names)
     plt.tight_layout()
-    plt.savefig(f'{layer}_geodesic_angles.png')
+    plt.savefig(f'{result_path}/{layer}_geodesic_angles.png')
 
     # plot_angle_matrices(
     #     angle_matrices=angle_matrices,

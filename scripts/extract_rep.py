@@ -86,12 +86,6 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--edit",
-        type=bool,
-        default=False
-    )
-
-    parser.add_argument(
         "--seed",
         type=int,
         default=None
@@ -103,6 +97,16 @@ def parse_args():
         default="cutout"
     )
 
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="procrustes"
+    )
+
+    parser.add_argument(
+        "--load_pca",
+        action="store_true",
+    )
 
     return parser.parse_args()
 
@@ -178,21 +182,33 @@ def compute_distances(X_train, X_test):
     distmat += distmat.T
     return distmat, diff_norms
 
-def edit_distances(X_train, distmat, idxs):
-    distmat = distmat.copy()
-    print("dist before: ", np.mean(distmat[:, idxs]), np.mean(distmat[idxs, :]))
+def compute_linear_cka(X, Y):
+    """
+    Centered Kernel Alignment (CKA), linear kernel.
+    Returns similarity in [0, 1]
+    """
+    X = X - X.mean(0, keepdims=True)
+    Y = Y - Y.mean(0, keepdims=True)
+    dot_product_similarity = np.linalg.norm(Y.T @ X, 'fro')**2
+    normalization_x = np.linalg.norm(X.T @ X, 'fro')
+    normalization_y = np.linalg.norm(Y.T @ Y, 'fro')
+    denom = normalization_x * normalization_y
+    if denom == 0:
+        return 0.0
+    return dot_product_similarity / denom
 
-    # use procruste's metrics
-    for i in idxs:
-        for j in tqdm(range(len(X_train))):
-            metric = LinearMetric(alpha=1.0, center_columns=True, score_method='angular')
-            metric.fit(X_train[i], X_train[j])
-            dist = metric.score(X_train[i], X_train[j])
-            distmat[i, j] = dist
-            distmat[j, i] = dist
+def compute_distances_arccos_cka(X):
+    n = len(X)
+    distmat = np.zeros((n, n))
+    total_pairs = n * (n - 1) // 2
 
-    print("dist after: ", np.mean(distmat[:, idxs]), np.mean(distmat[idxs, :]))
+    for i, j in tqdm(itertools.combinations(range(n), 2), total=total_pairs, desc="Computing arccos(CKA) distances"):
+        cka = compute_linear_cka(X[i], X[j])
+        cka = np.clip(cka, 0, 1)
+        dist = np.arccos(cka)
+        distmat[i, j] = dist
 
+    distmat += distmat.T
     return distmat
 
 def distance_vs_sample_size(args, output_path):
@@ -283,6 +299,7 @@ def extract_activity_all(experiment_ls, base_path, args):
         image_folder=args.data_path,batch_size=args.batch_size, num_workers=args.num_workers,test_size=args.test_size, 
         model_name=args.model_name, dataset=args.dataset, pretrained=args.pretrained
     ).get_layer_names()
+    print("Layer names: ", network_names)
 
     for exp in experiment_ls:
         output_path = f'{base_path}/experiments/{exp}'
@@ -290,7 +307,7 @@ def extract_activity_all(experiment_ls, base_path, args):
         save_path = f'{output_path}/results/activities_pca.npz'
         # save_path = None
 
-        if save_path and os.path.isfile(save_path):
+        if save_path and os.path.isfile(save_path) and args.load_pca:
             print(f"Loading PCA-reduced activities from {save_path}")
 
             with np.load(save_path, allow_pickle=False) as data:
@@ -319,7 +336,7 @@ def extract_activity_all(experiment_ls, base_path, args):
 
     return X_train_all, X_test_all, network_names_all
 
-def extract_raw_activity(experiment_ls, base_path, args, n_aug1, n_aug2):
+def extract_raw_activity(experiment_ls, base_path, args, n_aug1, n_aug2, aug_type="combined"):
     network_names = LayerActivityExtractor(checkpoint_path=f'{base_path}/experiments/{experiment_ls[-1]}/checkpoints/final_model.pth',
         image_folder=args.data_path,batch_size=args.batch_size, num_workers=args.num_workers,test_size=args.test_size, 
         model_name=args.model_name, dataset=args.dataset, pretrained=args.pretrained
@@ -370,7 +387,9 @@ def extract_raw_activity(experiment_ls, base_path, args, n_aug1, n_aug2):
         if X_concat.shape[0] == n_aug1 * n_aug2:
             X_concat = X_concat.reshape(n_aug1, n_aug2, X_concat.shape[-2], X_concat.shape[-1])
         print(X_concat.shape)
-        np.savez_compressed(f'{output_path}/{name}.npz', X_concat)
+        aug_type_str = f"{aug_type}_" if aug_type != "combined" else ""
+        np.save(f'{output_path}/{aug_type_str}{name}.npy', X_concat)
+   
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -386,7 +405,7 @@ def exp_to_name(exp_ls):
     symbol_map = {'temp': 'T', 'cutout_patch_size': 'C', 'sigma': 0.3}
 
     for exp in exp_ls:
-        if 'wide_resnet' and 'cutout_patch_size' in exp:
+        if 'wide_resnet' in exp and 'cutout_patch_size' in exp:
             words = exp.split('/')[-1].split('_')
             param_ls.append(words[-2])
             name_ls.append(f'C={words[-2]}, s={words[-1]}')
@@ -505,16 +524,25 @@ def comparison(path1, path2, args):
     fig.tight_layout()
     plt.savefig('reproduce_check.png')
 
-def get_experiments_name_all_aug(model_name, param_dict):
-    experiment_ls = [f"clean/exp_{model_name}_{param_dict['clean']}_0.0_0.0"]
+def get_experiments_name_all_aug(model_name, param_dict, seed=42):
+    seed_str = f"_seed{seed}" if seed else ""
+    experiment_ls = [f"clean{seed_str}/exp_{model_name}_{param_dict['clean']}_0.0_0.0"]
     experiment_ls += [f"rotate/exp_{model_name}_{param_dict['rotate']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
     experiment_ls += [f"sheer/exp_{model_name}_{param_dict['sheer']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
     experiment_ls += [f"jitter/exp_{model_name}_{param_dict['jitter']}_{c}_0.0" for c in [0.1, 0.2, 0.3, 0.4]]
     experiment_ls += [f"grayscale/exp_{model_name}_{param_dict['grayscale']}_{c}_0.0" for c in [0.1, 0.2, 0.3, 0.4]]
     experiment_ls += [f"gaussian_noise/exp_{model_name}_{param_dict['gaussian_noise']}_{c}_0.0" for c in [0.01, 0.02, 0.03, 0.04]]
     experiment_ls += [f"sp_noise/exp_{model_name}_{param_dict['sp_noise']}_{c}_0.0" for c in [0.05, 0.1, 0.15, 0.2]]
-    experiment_ls += [f"cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
+    experiment_ls += [f"cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0" for c in [2.0, 4.0, 6.0, 8.0]]
     experiment_ls += [f"crop/exp_{model_name}_{param_dict['crop']}_{c}_0.0" for c in [0.6, 0.7, 0.8, 0.9]]
+    return experiment_ls
+
+def get_experiments_name_two_aug(model_name, param_dict, aug1, aug2, aug1_params, aug2_params):
+    experiment_ls = []
+    for idx_c, c in enumerate(aug1_params):
+        for idx_s, s in enumerate(aug2_params):
+            if idx_c != idx_s:
+                experiment_ls.append(f"{aug1[idx_c]}/exp_{model_name}_{param_dict[aug1[idx_c]]}_{c}_{aug2[idx_s]}_{param_dict[aug2[idx_s]]}{s}_0.0")
     return experiment_ls
             
 
@@ -543,16 +571,20 @@ def main():
     pretrain_str = "/pretrained" if args.pretrained else ""
     pretrain_str = f"{pretrain_str}_seed{args.seed}" if args.seed else pretrain_str
 
-    aug1_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
-    aug2_param = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
-    # aug2_param = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    # aug2_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
+    aug1_param = [0.01, 0.02, 0.03, 0.04]
+    aug2_param = [0.0, 0.0, 0.0, 0.0]
+    # aug1_param = [48.0, 80.0, 112.0]
+    # aug2_param = [0.2, 0.5, 0.8]
     model_name = "resnet" if args.model_name == 'resnet50' else args.model_name
     if args.aug_type == "combined":
-        experiment_ls = get_experiments_name_all_aug(model_name, param_dict)
+        experiment_ls = get_experiments_name_all_aug(model_name, param_dict, args.seed)
+    elif args.aug_type == "two":
+        aug_param = [24.0, 24.0, 0.4, 0.1, 0.04, 0.2, 0.9]
+        aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "crop"]
+        experiment_ls = get_experiments_name_two_aug(model_name, param_dict, aug_types, aug_types, aug_param, aug_param)
     else:
         experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
-
+    print(experiment_ls)
     # dist_matrix_path = "/mnt/home/the10/ceph/results/netrep/experiments/clean/distance_matrix_pc_all.npy"
     # visualize_distance_matrices(dist_matrix_path, sample_sizes=[10, 20, 50, 100, 200, 500, 1000], seeds=[42, 43, 44, 45, 46])
     # comparison('/mnt/home/the10/ceph/results/netrep/experiments/clean/checkpoints/final_model.pth', '/mnt/home/the10/ceph/results/netrep/experiments/clean_seed43/checkpoints/final_model.pth', args)
@@ -589,22 +621,24 @@ def main():
     # extract activity for all networks
     else:
         X_train, X_test, network_names = extract_activity_all(experiment_ls, base_path, args)
-        # extract_raw_activity(experiment_ls, base_path, args, n_aug1=7, n_aug2=7)
+        # extract_raw_activity(experiment_ls, base_path, args, n_aug1=8, n_aug2=8, aug_type=args.aug_type)
         # exit()
 
     # compute procruste's distance between pair of networks
-    if not os.path.isfile(f"{result_path}/distance_matrix.npy"):
-        distmat, norms = compute_distances(X_train, X_train)
-        np.save(f'{result_path}/distance_matrix.npy', distmat)
-        np.save(f'{result_path}/diff_norms.npy', norms)
-    elif args.edit:
-        distmat = np.load(f"{result_path}/distance_matrix.npy")
-        distmat = edit_distances(X_train, distmat, np.arange(10*4, 11*4))
-        print(f"Saving editted distance matrix to {result_path}/distance_matrix.npy")
-        np.save(f'{result_path}/distance_matrix.npy', distmat)
-    else:
-        distmat = np.load(f"{result_path}/distance_matrix.npy")
-    print(len(X_train),len(X_train[0]), distmat.shape)
+    if args.metric == "procrustes":
+        if args.load_pca and os.path.isfile(f"{result_path}/distance_matrix.npy"):
+            distmat = np.load(f"{result_path}/distance_matrix.npy")
+        else:
+            distmat, norms = compute_distances(X_train, X_train)
+            np.save(f'{result_path}/distance_matrix.npy', distmat)
+            np.save(f'{result_path}/diff_norms.npy', norms)
+
+    if args.metric == "cka":
+        if args.load_pca and os.path.isfile(f"{result_path}/cka_distance_matrix.npy"):
+            distmat = np.load(f"{result_path}/cka_distance_matrix.npy")
+        else:
+            distmat = compute_distances_arccos_cka(X_train)
+            np.save(f'{result_path}/cka_distance_matrix.npy', distmat)
 
     # compute diff norms from origin to each augmented shape
     # origin_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_0.0_0.0"]
@@ -615,7 +649,7 @@ def main():
         l = len(network_names) // len(experiment_ls)
         expanded_experiment_ls = [exp for exp in experiment_ls for _ in range(l)]
         name_ls, _ = exp_to_name(expanded_experiment_ls)
-        visualize_distance(distmat, name_ls, result_path, group_by_layers=True)
+        visualize_distance(distmat, name_ls, result_path, group_by_layers=True, metric=args.metric)
 
         name_ls, _ = exp_to_name(experiment_ls)
     else:
@@ -629,9 +663,9 @@ def main():
     coordinates = pca.fit_transform(Z)
     print(f"variance explained in 2 dim: {np.sum(pca.explained_variance_ratio_)}")
     if 'all' in args.experiment:
-        visualize_coordinates_all(coordinates, network_names, result_path, name_ls)
-        visualize_layer_aligned(coordinates, network_names, result_path, name_ls, mds_dim=0)
-        visualize_layer_aligned(coordinates, network_names, result_path, name_ls, mds_dim=1)
+        visualize_coordinates_all(coordinates, network_names, result_path, name_ls, metric=args.metric)
+        visualize_layer_aligned(coordinates, network_names, result_path, name_ls, mds_dim=0, metric=args.metric)
+        visualize_layer_aligned(coordinates, network_names, result_path, name_ls, mds_dim=1, metric=args.metric)
     else:
         visualize_coordinates(coordinates, network_names, result_path)
 

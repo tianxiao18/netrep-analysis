@@ -119,6 +119,20 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--aug_type2",
+        type=str,
+        default=None,
+        help="Optional second augmentation type to stack on top of aug_type"
+    )
+
+    parser.add_argument(
+        "--aug_param2",
+        type=float,
+        default=None,
+        help="Parameter for the second augmentation"
+    )
+
+    parser.add_argument(
         "--checkpoint",
         type=str,
         default=None
@@ -130,6 +144,45 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+PARAM_DICT = {
+    "fixed_blur": "sigma", "weak_random_blur": "temp",
+    "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean",
+    "cutout_jitter": "cutout_patch_size", "cutout_crop": "cutout_patch_size", "rot_sheer": "rot_deg",
+    "rotate": "rot_deg", "sheer": "shear_deg", "gaussian_noise": "noise_std",
+    "jitter": "cj_strength", "grayscale": "gray_prob",
+    "cutout_only": "cutout_patch_size", "crop": "extra_crop_scale",
+}
+
+def aug_to_config(config, aug_type, aug_param, op_param=0.0):
+    """Merge a single (aug_type, aug_param) pair into an existing config dict."""
+    if aug_type is None or aug_type == "clean":
+        return
+    param_name = PARAM_DICT[aug_type]
+    config[param_name] = aug_param
+    if "blur" in aug_type:
+        config["blur"] = aug_type
+    if aug_type == "cutout":
+        config["sigma"] = op_param
+    if aug_type == "rotate":
+        config["rot_deg"] = aug_param
+    if aug_type == "sheer":
+        config["shear_deg"] = aug_param
+    if aug_type == "gaussian_noise":
+        config["noise_std"] = aug_param
+    if aug_type == "jitter":
+        config["cj_strength"] = aug_param
+    if aug_type == "grayscale":
+        config["gray_prob"] = aug_param
+    if aug_type == "crop":
+        config["extra_crop_scale"] = aug_param
+    if aug_type == "cutout_jitter":
+        config["cj_strength"] = op_param
+    if aug_type == "cutout_crop":
+        config["extra_crop_scale"] = op_param
+    if aug_type == "rot_sheer":
+        config["shear_deg"] = op_param
+
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -144,13 +197,7 @@ def main():
     set_seed(args.seed)
     # warmup_epochs = args.warmup_epochs if args.batch_size >= 512 else 0
     warmup_epochs = args.warmup_epochs
-    param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
-                  "sp_noise": "sp_prob", "cutout": "cutout_patch_size", "clean": "clean",
-                  "cutout_jitter": "cutout_patch_size", "cutout_crop": "cutout_patch_size", "rot_sheer": "rot_deg",
-                  "rotate": "rot_deg", "sheer": "shear_deg", "gaussian_noise": "noise_std",
-                  "jitter": "cj_strength", "grayscale": "gray_prob",
-                  "cutout_only": "cutout_patch_size", "crop": "extra_crop_scale"}
-    param_name = param_dict[args.aug_type]
+    param_name = PARAM_DICT[args.aug_type]
     print(args.aug_type, args.aug_param, args.seed, args.checkpoint)
 
     print("Setting up dataloader...")
@@ -158,12 +205,9 @@ def main():
 
     # here crop has to be true to ensure same shape input
     # if pretrained, we have to scale image to 224 to avoid changing pretrained weights
-    config = {"crop": True, "flip": True, param_name: args.aug_param, "dataset": args.dataset, "to_224": args.pretrained}
-    if "blur" in args.aug_type: config["blur"] = args.aug_type
-    if args.aug_type == "cutout": config["sigma"] = args.op_param
-    if args.aug_type == "cutout_jitter": config["cj_strength"] = args.op_param
-    if args.aug_type == "cutout_crop": config["extra_crop_scale"] = args.op_param
-    if args.aug_type == "rot_sheer": config["shear_deg"] = args.op_param
+    config = {"crop": True, "flip": True, "dataset": args.dataset, "to_224": args.pretrained}
+    aug_to_config(config, args.aug_type, args.aug_param, op_param=args.op_param)
+    aug_to_config(config, args.aug_type2, args.aug_param2)
 
     if args.dataset == 'imagenet' or args.pretrained:
         mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
@@ -185,7 +229,8 @@ def main():
     elif args.dataset == 'cifar10':
         train_loader, val_loader = get_cifar_dataloaders(args.data_path, args.batch_size, args.num_workers, train_tf, eval_tf)
 
-    model = get_model(device, model_name=args.model, checkpoint=args.checkpoint, pretrained=args.pretrained)
+    num_classes = 1000 if args.dataset == 'imagenet' else 10
+    model = get_model(device, model_name=args.model, checkpoint=args.checkpoint, pretrained=args.pretrained, num_classes=num_classes)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
     if args.model == 'vit':
@@ -206,6 +251,9 @@ def main():
 
     best_val_acc = 0
     title = f"{args.model}_{args.aug_type}" if args.aug_param is None else f"{args.model}_{args.aug_type}_{param_name}{args.aug_param}"
+    if args.aug_type2 is not None:
+        param_name2 = PARAM_DICT[args.aug_type2]
+        title += f"_{args.aug_type2}_{param_name2}{args.aug_param2}"
 
     wandb.init(
         project=f"{args.model}-imagenet", 
@@ -217,7 +265,8 @@ def main():
             "momentum": args.momentum,
             "weight_decay": args.weight_decay,
             "label_smoothing": args.label_smoothing,
-            param_name: args.aug_param
+            param_name: args.aug_param,
+            **({"aug_type2": args.aug_type2, PARAM_DICT[args.aug_type2]: args.aug_param2} if args.aug_type2 else {}),
         }
     )
     output_path = f"/mnt/home/the10/ceph/results/netrep/experiments/{args.aug_type}"
@@ -226,9 +275,13 @@ def main():
     if args.seed != 42:
         output_path = output_path+f"_seed{args.seed}"
     if args.aug_param is not None:
-        output_path = os.path.join(output_path, f"exp_{args.model}_{param_name}_{args.aug_param}")
-    if args.op_param is not None:
-        output_path = output_path+f"_{args.op_param}"
+        exp_name = f"exp_{args.model}_{param_name}_{args.aug_param}"
+        if args.aug_type2 is not None:
+            param_name2 = PARAM_DICT[args.aug_type2]
+            exp_name += f"_{args.aug_type2}_{param_name2}{args.aug_param2}"
+        if args.op_param is not None:
+            exp_name += f"_{args.op_param}"
+        output_path = os.path.join(output_path, exp_name)
     os.makedirs(os.path.join(output_path, "checkpoints"), exist_ok=True)
 
     print("Training model...")

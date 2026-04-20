@@ -16,7 +16,7 @@ import torchvision
 import os
 from itertools import groupby
 
-def visualize_distance(distmat, network_names, output_path, off_diagonal_color=True, group_by_layers=False):
+def visualize_distance(distmat, network_names, output_path, off_diagonal_color=True, group_by_layers=False, metric="procrustes"):
     distmat = np.array(distmat)
     mask = np.eye(distmat.shape[0], dtype=bool)
 
@@ -54,8 +54,9 @@ def visualize_distance(distmat, network_names, output_path, off_diagonal_color=T
     plt.xlabel("Network Index")
     plt.ylabel("Network Index")
     plt.tight_layout()
-    plt.savefig(f'{output_path}/dist.png', dpi=250)
-    print(f"Saving to {output_path}/dist.png")
+    metric_str = "cka_" if metric == "cka" else ""
+    plt.savefig(f'{output_path}/{metric_str}dist.png', dpi=250)
+    print(f"Saving to {output_path}/{metric_str}dist.png")
     plt.close()
 
 def dedup_labels_centered(labels):
@@ -88,7 +89,7 @@ def visualize_coordinates(coords, network_names, output_path):
     print(f"Saving to {output_path}/mds_embedding.png")
     plt.close()
 
-def visualize_coordinates_all(coords, network_names, output_path, experiments):
+def visualize_coordinates_all(coords, network_names, output_path, experiments, metric="procrustes"):
     plt.figure(figsize=(10, 8))
     n_networks = len(network_names) // len(experiments)
     base_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
@@ -116,11 +117,12 @@ def visualize_coordinates_all(coords, network_names, output_path, experiments):
     plt.colorbar()
     # plt.legend(loc="center left", bbox_to_anchor=(1.0, 0.5))
     plt.tight_layout()
-    plt.savefig(f'{output_path}/mds_embedding.png')
+    metric_str = "cka_" if metric == "cka" else ""
+    plt.savefig(f'{output_path}/{metric_str}mds_embedding.png')
     print(f"Saving to {output_path}/mds_embedding.png")
     plt.close()
 
-def visualize_layer_aligned(coords, network_names, output_path, experiments, mds_dim=1):
+def visualize_layer_aligned(coords, network_names, output_path, experiments, mds_dim=1, metric="procrustes"):
     plt.figure(figsize=(15, 4))
     n_networks = len(network_names) // len(experiments)
     base_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
@@ -157,8 +159,9 @@ def visualize_layer_aligned(coords, network_names, output_path, experiments, mds
     plt.title(f"Layer-Aligned MDS Dim {mds_dim}")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f'{output_path}/layer_aligned_mds{mds_dim}.png')
-    print(f"Saving to {output_path}/layer_aligned_mds{mds_dim}.png")
+    metric_str = "cka_" if metric == "cka" else ""
+    plt.savefig(f'{output_path}/{metric_str}layer_aligned_mds{mds_dim}.png')
+    print(f"Saving to {output_path}/{metric_str}layer_aligned_mds{mds_dim}.png")
     plt.close()
 
 def visualize_distance_matrices(dist_matrix_path, sample_sizes, seeds, i=0, j=1):

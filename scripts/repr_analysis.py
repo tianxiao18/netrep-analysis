@@ -101,6 +101,12 @@ def parse_args():
         default="cutout"
     )
 
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="procrustes"
+    )
+
     return parser.parse_args()
 
 def set_seed(seed=42):
@@ -110,6 +116,7 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 def exp_to_name(exp_ls):
     name_ls = []
     param_ls = []
@@ -117,13 +124,12 @@ def exp_to_name(exp_ls):
     symbol_map = {'temp': 'T', 'cutout_patch_size': 'C', 'sigma': 0.3}
 
     for exp in exp_ls:
-        print(exp)
-        if 'cutout_patch_size' in exp and exp[-3:] != '_0.0':
+        if 'wide_resnet' in exp or 'cutout_patch_size' in exp:
             words = exp.split('/')[-1].split('_')
             param_ls.append(words[-2])
             name_ls.append(f'C={words[-2]}, s={words[-1]}')
             continue
-        if 'rot_deg' in exp and '_0.0' not in exp:
+        if 'rot_deg' in exp and '0.0' not in exp:
             words = exp.split('/')[-1].split('_')
             param_ls.append(words[-3])
             name_ls.append(f'r={words[-2]}, s={words[-1]}')
@@ -159,7 +165,7 @@ def exp_to_name(exp_ls):
 
     return name_ls, param_ls
 
-def visualize_distance_all(distmat, layer_names, network_names, output_path):
+def visualize_distance_all(distmat, layer_names, network_names, output_path, metric="procrustes"):
     distmat = np.array(distmat)
     num_layers = len(layer_names)
 
@@ -212,9 +218,10 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path):
             ax.set_xticklabels([])
 
     plt.tight_layout()
-    plt.savefig(f'{output_path}/dist.png', dpi=200)
-    np.save(f'{output_path}/distance_matrix.npy', distmat)
-    print(f"Saving to {output_path}/dist.png")
+    metric_str = "cka_" if metric == "cka" else ""
+    plt.savefig(f'{output_path}/{metric_str}dist.png', dpi=200)
+    np.save(f'{output_path}/{metric_str}distance_matrix.npy', distmat)
+    print(f"Saving to {output_path}/{metric_str}dist.png")
     plt.close()
 
 def visualize_distance_histogram(distmat, layer_names, network_names, output_path):
@@ -244,10 +251,11 @@ def visualize_distance_histogram(distmat, layer_names, network_names, output_pat
     print(f"Saving to {output_path}/hist.png")
     plt.close()
 
-def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
+def visualize_coordinates_2d(distmat, layer_names, network_names, output_path, metric="procrustes"):
+    import matplotlib as mpl
     num_layers = len(layer_names)
     rows, cols = 1, 4
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.5, rows * 4))
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
     axes = axes.flatten()
 
     for ax in axes[num_layers:]:
@@ -274,13 +282,28 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
         coord_list.append(coordinates)
 
     all_coords = np.vstack(coord_list)
-    x_min, x_max = np.min(all_coords[:, 0]-0.05), np.max(all_coords[:, 0]+0.05)
-    y_min, y_max = np.min(all_coords[:, 1]-0.05), np.max(all_coords[:, 1]+0.05)
 
-    network_names = [name.split(',') for name in network_names]
+    # `network_names` can be either:
+    # - two-parameter labels like "C=12.0, s=0.2" (some cutout-style sweeps), or
+    # - single-parameter labels like "T=4.0" / "clean=0.0" (most other sweeps).
+    # Make parsing robust so visualization doesn't crash on single-parameter runs.
+    parsed_pairs = []
+    for name in network_names:
+        parts = [p.strip() for p in str(name).split(',') if p.strip()]
+        if len(parts) >= 2:
+            x_part, y_part = parts[0], parts[1]
+        elif len(parts) == 1:
+            x_part, y_part = parts[0], "s=0.0"
+        else:
+            x_part, y_part = "C=0.0", "s=0.0"
+        parsed_pairs.append((x_part, y_part))
 
-    x = [float(c.split("=")[1]) for c, _ in network_names]
-    y = [float(s.split("=")[1]) for _, s in network_names]
+    def _val_after_equals(s):
+        s = str(s).strip()
+        return float(s.split("=", 1)[1]) if "=" in s else float(s)
+
+    x = [_val_after_equals(x_part) for x_part, _ in parsed_pairs]
+    y = [_val_after_equals(y_part) for _, y_part in parsed_pairs]
 
     C_vals = sorted(set(x))
     s_vals = sorted(set(y))
@@ -289,24 +312,30 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
     s_to_idx = {s: i for i, s in enumerate(s_vals)}
 
     color_values = np.linspace(0.3, 1.0, len(C_vals))
-    C_colors = [cm.Purples(color_values), cm.Blues(color_values), cm.Greens(color_values), cm.Oranges(color_values)]
+    color_maps = [cm.Purples, cm.Blues, cm.Greens, cm.Oranges]
+    C_colors = [cmap(color_values) for cmap in color_maps]
     base_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
     s_shapes = list(itertools.islice(itertools.cycle(base_shapes), len(s_vals)))
 
-    x = [float(c.split("=")[1]) for c, _ in network_names]
-    y = [float(s.split("=")[1]) for _, s in network_names]
-
     cs_to_idx = {(c_val, s_val): i for i, (c_val, s_val) in enumerate(zip(x, y))}
+
+    # Normalize the color value for the colorbar (use 0...1 scale for colormap)
+    norm = mpl.colors.Normalize(vmin=min(C_vals), vmax=max(C_vals))
 
     for l in range(num_layers):
         coordinates = coord_list[l]
         ax = axes[l]
 
         # scatter points
+        sc_objs = []
         for i, (c_val, s_val) in enumerate(zip(x, y)):
+            # Determine color from normalized C value
             color = C_colors[l][C_to_idx[c_val]]
             marker = s_shapes[s_to_idx[s_val]]
-            ax.scatter(coordinates[i, 0], coordinates[i, 1], marker=marker, color=color, s=150)
+            sc = ax.scatter(coordinates[i, 0], coordinates[i, 1], marker=marker, color=color, s=150,
+                            edgecolors='none', cmap=None, 
+                            )
+            sc_objs.append(sc)
         
         # plot grids
         for c_val in C_vals:
@@ -340,20 +369,31 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path):
             for i in range(1, len(pts)):
                 ax.plot([pts[0,0],pts[i,0]], [pts[0,1],pts[i,1]], linestyle=":", color="gray", zorder=0)
             
-    ax.legend(fontsize=8, labelspacing=0.8, frameon=False)
+    # Colorbar with correct colormap for each subplot
+    for l, ax in enumerate(axes[:num_layers]):
+        cmap = color_maps[l % len(color_maps)]
+        sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('C value')
 
-    handles = (
-        [mpatches.Patch(color=C_colors[-1][i], label=f"c={val}") for i, val in enumerate(C_vals)] +
-        [mlines.Line2D([], [], color="black", marker=s_shapes[i],
-                    ls="None", ms=10, label=f"s={val}") for i, val in enumerate(s_vals)]
-    )
-    ax.legend(handles=handles, bbox_to_anchor=(1.02, 0.5), loc="center left")
-    # ax.set_xlim(x_min, x_max)
-    # ax.set_ylim(y_min, y_max)
+    # Add legend for marker shape
+    # from matplotlib.lines import Line2D
+    # marker_handles = [
+    #     Line2D([], [], linestyle='None', marker=s_shapes[i], color='black', label=f's={val}', markersize=10)
+    #     for i, val in enumerate(s_vals)
+    # ]
+    # # Put the marker legend on the last axis, right side
+    # axes[-1].legend(
+    #     handles=marker_handles,
+    #     bbox_to_anchor=(1.05, 0.75), loc="center left",
+    #     frameon=False, fontsize=8, title="Shape: s"
+    # )
 
     plt.tight_layout()
-    plt.savefig(f'{output_path}/mds_embedding.png', dpi=200)
-    print(f"Saved to {output_path}/mds_embedding.png")
+    metric_str = "cka_" if metric == "cka" else ""
+    plt.savefig(f'{output_path}/{metric_str}mds_embedding.png', dpi=200)
+    print(f"Saved to {output_path}/{metric_str}mds_embedding.png")
     plt.close()
 
 def visualize_coordinates_2d_all_augmentation(distmat, layer_names, network_names, output_path):
@@ -395,6 +435,7 @@ def visualize_coordinates_2d_all_augmentation(distmat, layer_names, network_name
     C_colors = [cm.Blues(color_values), cm.Purples(color_values), cm.Greens(color_values), cm.Oranges(color_values)]
     base_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
     s_shapes = list(itertools.islice(itertools.cycle(base_shapes), 8))
+    print("Network names: ", network_names)
 
     aug_types = np.array([aug_type for aug_type, _ in network_names[1:]])
     n_augs = len(np.unique(aug_types))
@@ -435,7 +476,7 @@ def visualize_coordinates_2d_all_augmentation(distmat, layer_names, network_name
     print(f"Saved to {output_path}/mds_embedding.png")
     plt.close()
 
-def visualize_coordinates_3d_plotly(distmat, layer_names, network_names, output_path):
+def visualize_coordinates_3d_plotly(distmat, layer_names, network_names, output_path, metric="procrustes"):
     """
     Interactive 3D version of your function using Plotly subplots.
     Saves:  <output_path>/mds_embedding_3d.html
@@ -650,11 +691,12 @@ def visualize_coordinates_3d_plotly(distmat, layer_names, network_names, output_
         margin=dict(l=10, r=10, t=50, b=10),
     )
 
-    out_html = os.path.join(output_path, "mds_embedding_3d.html")
+    metric_str = "cka_" if metric == "cka" else ""
+    out_html = os.path.join(output_path, f"{metric_str}mds_embedding_3d.html")
     fig.write_html(out_html)
     print(f"Saved interactive plot to {out_html}")
-
-def visualize_coordinates_3d(distmat, layer_names, network_names, output_path):
+    
+def visualize_coordinates_3d(distmat, layer_names, network_names, output_path, metric="procrustes"):
     num_layers = len(layer_names)
     rows, cols = 4, len(network_names)//4
     fig = plt.figure(figsize=(cols * 6, rows * 5))
@@ -1261,7 +1303,7 @@ def get_experiments_name_all_aug(model_name, param_dict):
     experiment_ls += [f"grayscale/exp_{model_name}_{param_dict['grayscale']}_{c}_0.0" for c in [0.1, 0.2, 0.3, 0.4]]
     experiment_ls += [f"gaussian_noise/exp_{model_name}_{param_dict['gaussian_noise']}_{c}_0.0" for c in [0.01, 0.02, 0.03, 0.04]]
     experiment_ls += [f"sp_noise/exp_{model_name}_{param_dict['sp_noise']}_{c}_0.0" for c in [0.05, 0.1, 0.15, 0.2]]
-    # experiment_ls += [f"cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0" for c in [4.0, 12.0, 18.0, 24.0]]
+    experiment_ls += [f"cutout/exp_{model_name}_{param_dict['cutout']}_{c}_0.0" for c in [2.0, 4.0, 6.0, 8.0]]
     experiment_ls += [f"crop/exp_{model_name}_{param_dict['crop']}_{c}_0.0" for c in [0.6, 0.7, 0.8, 0.9]]
     return experiment_ls
 
@@ -1289,16 +1331,20 @@ def main():
 
     aug1_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
     aug2_param = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
-    # aug2_param = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    # aug2_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
+    # aug1_param = [48.0, 80.0, 112.0]
+    # aug2_param = [0.2, 0.5, 0.8]
     # experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
     if args.aug_type == "combined":
         experiment_ls = get_experiments_name_all_aug(args.model_name, param_dict)
     else:
         experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
 
-    print(f"Loading distmat from {result_path}/distance_matrix.npy")
-    distmat = np.load(f"{result_path}/distance_matrix.npy")
+    if args.metric == "cka":
+        distmat = np.load(f"{result_path}/cka_distance_matrix.npy")
+    elif args.metric == "procrustes":
+        distmat = np.load(f"{result_path}/distance_matrix.npy")
+    else:
+        raise ValueError(f"Invalid metric: {args.metric}")
     # network_indices = [1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 2.3, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 4.0, 4.1, 4.2]
     # network_indices = [3.1, 4.1]
     # network_names = [f'module.layer{i}' for i in network_indices] + ['avgpool']
@@ -1325,14 +1371,14 @@ def main():
     # ])
     # distmat = np.delete(np.delete(distmat, idx, axis=0), idx, axis=1)
 
-    print(distmat.shape)
-    visualize_distance_all(distmat, network_names, name_ls, output_path)
+    print(name_ls)
+    visualize_distance_all(distmat, network_names, name_ls, output_path, metric=args.metric)
 
     if args.aug_type == "combined":
         visualize_coordinates_2d_all_augmentation(distmat, network_names, name_ls, output_path)
     else:
-        visualize_coordinates_2d(distmat, network_names, name_ls, output_path)
-        visualize_coordinates_3d_plotly(distmat, network_names, name_ls, output_path)
+        visualize_coordinates_2d(distmat, network_names, name_ls, output_path, metric=args.metric)
+        visualize_coordinates_3d_plotly(distmat, network_names, name_ls, output_path, metric=args.metric)
         # visualize_distance_histogram(distmat, network_names, name_ls, output_path)
         # visualize_gaussian_curvature(distmat, network_names, name_ls, output_path)
     
