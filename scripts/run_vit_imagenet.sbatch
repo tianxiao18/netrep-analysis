@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=resnet-train
+#SBATCH --job-name=vit-imagenet
 #SBATCH --partition=gpu
 #SBATCH --gpus=4
 #SBATCH --nodes=1
@@ -11,7 +11,7 @@
 AUG_TYPE="cutout"
 AUG_PARAM="8.0"
 OP_PARAM="0.2"
-MODEL="resnet18"
+MODEL="vit"
 # AUG_TYPE="clean"
 # AUG_PARAM="0"
 # MODEL="wide_resnet"
@@ -32,20 +32,22 @@ source ~/netrep-analysis/venv/bin/activate
 # python scripts/resnet.py --aug_type=${AUG_TYPE} --aug_param=16.0 --op_param=0.5 --model=${MODEL} --dataset=cifar10 --momentum=0.9 --weight_decay=5e-4 --warmup_epochs=0 --epochs=200 --data_path=/mnt/home/the10/ceph/dataset/cifar10 --seed=44
 # python scripts/resnet.py --aug_type=${AUG_TYPE} --aug_param=28.0 --op_param=1.0 --model=${MODEL} --dataset=cifar10 --base_lr=3e-4 --weight_decay=0.05 --warmup_epochs=0 --epochs=50 --data_path=/mnt/home/the10/ceph/dataset/cifar10 --checkpoint=/mnt/home/the10/ceph/results/netrep/experiments/clean/exp_wide_resnet_clean_0.0/checkpoints/final_model.pth --seed=42
 
+# Cosine+warmup (per-epoch): avoids OneCycle mid-run LR peak that matches val “crater then recover”.
 python scripts/resnet.py \
     --aug_type=${AUG_TYPE} \
     --aug_param=0.0 \
     --op_param=0.0 \
     --model=${MODEL} \
     --dataset=imagenet \
-    --base_lr=3e-4 \
-    --weight_decay=5e-4 \
+    --base_lr=5e-4 \
+    --weight_decay=1e-2 \
     --warmup_epochs=0 \
+    --lr_schedule=cosine \
     --epochs=20 \
     --data_path=/tmp/imagenet \
     --pretrained \
-    --lr_schedule=cosine \
-    --seed=42
+    --label_smoothing=0.1 \
+    --seed=44
 
 for AUG_PARAM in 24.0 40.0 56.0 72.0 88.0 104.0 120.0; do
     for OP_PARAM in 0.1 0.2 0.3 0.4 0.5 0.6 0.7; do
@@ -56,13 +58,14 @@ for AUG_PARAM in 24.0 40.0 56.0 72.0 88.0 104.0 120.0; do
             --op_param=${OP_PARAM} \
             --model=${MODEL} \
             --dataset=imagenet \
-            --base_lr=3e-4 \
-            --weight_decay=5e-4 \
+            --base_lr=5e-4 \
+            --weight_decay=1e-2 \
             --warmup_epochs=0 \
+            --lr_schedule=cosine \
             --epochs=20 \
             --data_path=/tmp/imagenet \
             --pretrained \
-            --lr_schedule=cosine \
-            --seed=42
+            --label_smoothing=0.1 \
+            --seed=44
     done
 done

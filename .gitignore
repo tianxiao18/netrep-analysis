@@ -6,3 +6,4 @@ wandb
 *.pth
 experiments
 results
+shape_regression_features_cache

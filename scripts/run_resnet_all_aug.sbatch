@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/tmp/%x-%j.out
 
 # AUG_TYPE="cutout_crop"
@@ -77,6 +77,7 @@ done
 # AUGS["grayscale"]="0.03 0.05 0.08 0.1"
 # AUGS["gaussian_noise"]="0.01 0.02 0.03 0.04"
 # AUGS["sp_noise"]="0.05 0.1 0.15 0.2"
+# AUGS["cutout"]="2.0 4.0 6.0 8.0"
 # AUGS["crop"]="0.6 0.7 0.8 0.9"
 
 # AUG_NAMES=(${!AUGS[@]})
@@ -104,7 +105,7 @@ done
 #             --aug_param=${PARAM1} \
 #             --aug_type2=${AUG2} \
 #             --aug_param2=${PARAM2} \
-#             --model=resnet18 \
+#             --model=${MODEL} \
 #             --dataset=cifar10 \
 #             --base_lr=0.03 \
 #             --weight_decay=5e-4 \
