@@ -22,7 +22,7 @@ cd scripts
 
 ## 1. Train (`resnet.py`)
 
-Example (CIFAR-10, DenseNet, cutout):
+Example (CIFAR-10, Resnet18, cutout):
 
 ```bash
 python resnet.py \
@@ -30,13 +30,13 @@ python resnet.py \
   --data_path=/mnt/home/the10/ceph/dataset/cifar10 \
   --aug_param=12 \
   --op_param=0.2 \
-  --model=densenet \
+  --model=resnet18 \
   --dataset=cifar10 \
-  --base_lr=0.01 \
-  --weight_decay=0.01 \
+  --base_lr=0.03 \
+  --weight_decay=5e-4 \
   --momentum=0.9 \
   --warmup_epochs=0 \
-  --epochs=50
+  --epochs=100
 ```
 
 More options: `python resnet.py --help`. Checkpoints and logging paths are set inside the script (including Weights & Biases).
