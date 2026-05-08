@@ -143,6 +143,18 @@ def parse_args():
         action="store_true"
     )
 
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="onecycle",
+        choices=("onecycle", "cosine"),
+        help=(
+            "onecycle: OneCycleLR (step each batch); LR often peaks mid-run. "
+            "cosine: linear warmup then cosine decay (step each epoch)—smoother "
+            "for ViT fine-tuning from pretrained weights."
+        ),
+    )
+
     return parser.parse_args()
 
 PARAM_DICT = {
@@ -204,8 +216,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # here crop has to be true to ensure same shape input
-    # if pretrained, we have to scale image to 224 to avoid changing pretrained weights
-    config = {"crop": True, "flip": True, "dataset": args.dataset, "to_224": args.pretrained}
+    # if pretrained and fine tune on cifar-10, we have to scale image to 224 to avoid changing pretrained weights
+    config = {"crop": True, "flip": True, "dataset": args.dataset, "to_224": args.pretrained and args.dataset != 'imagenet'}
     aug_to_config(config, args.aug_type, args.aug_param, op_param=args.op_param)
     aug_to_config(config, args.aug_type2, args.aug_param2)
 
@@ -233,21 +245,30 @@ def main():
     model = get_model(device, model_name=args.model, checkpoint=args.checkpoint, pretrained=args.pretrained, num_classes=num_classes)
 
     criterion = LabelSmoothingCrossEntropy(args.label_smoothing)
+    max_lr = args.base_lr * (args.batch_size / 256)
     if args.model == 'vit':
         optimizer = optim.AdamW(
             params=model.parameters(),
-            lr=args.base_lr * (args.batch_size / 256),
+            lr=max_lr,
             weight_decay=args.weight_decay
         )
     else:
         optimizer = optim.SGD(
             model.parameters(),
-            lr=args.base_lr * (args.batch_size / 256),
+            lr=max_lr,
             momentum=args.momentum,
             weight_decay=args.weight_decay
         )
-    # lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
-    lr_scheduler = get_onecycle_lr_scheduler(optimizer, len(train_loader), warmup_epochs, args)
+
+    use_cosine = args.lr_schedule == "cosine"
+    if use_cosine:
+        lr_scheduler = get_lr_scheduler(optimizer, warmup_epochs, args.epochs)
+        step_sched_per_batch = False
+    else:
+        lr_scheduler = get_onecycle_lr_scheduler(
+            optimizer, len(train_loader), warmup_epochs, args
+        )
+        step_sched_per_batch = True
 
     best_val_acc = 0
     title = f"{args.model}_{args.aug_type}" if args.aug_param is None else f"{args.model}_{args.aug_type}_{param_name}{args.aug_param}"
@@ -265,6 +286,7 @@ def main():
             "momentum": args.momentum,
             "weight_decay": args.weight_decay,
             "label_smoothing": args.label_smoothing,
+            "lr_schedule": args.lr_schedule,
             param_name: args.aug_param,
             **({"aug_type2": args.aug_type2, PARAM_DICT[args.aug_type2]: args.aug_param2} if args.aug_type2 else {}),
         }
@@ -286,9 +308,19 @@ def main():
 
     print("Training model...")
     for epoch in range(args.epochs):
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, lr_scheduler, device)
+        sched_for_train = lr_scheduler if step_sched_per_batch else None
+        train_loss, train_acc = train(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            sched_for_train,
+            device,
+            step_scheduler_every_batch=step_sched_per_batch,
+        )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        # lr_scheduler.step()
+        if use_cosine:
+            lr_scheduler.step()
 
         print(f"[Epoch {epoch+1}/{args.epochs}] "
               f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")

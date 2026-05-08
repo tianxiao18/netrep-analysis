@@ -35,6 +35,11 @@ import random
 import gc
 import math
 
+# Cutout patch × σ grid; flat order is ``for c in CUTOUT_PATCH_GRID: for s in CUTOUT_SIGMA_GRID``.
+CUTOUT_PATCH_GRID = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
+CUTOUT_SIGMA_GRID = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
+
+
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
     parser.add_argument(
@@ -97,6 +102,11 @@ def parse_args():
 
     parser.add_argument(
         "--load_pca",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        "--single_param",
         action="store_true"
     )
 
@@ -169,7 +179,7 @@ def exp_to_name(exp_ls):
     symbol_map = {'temp': 'T', 'cutout_patch_size': 'C', 'sigma': 0.3}
 
     for exp in exp_ls:
-        if 'wide_resnet' in exp and 'cutout_patch_size' in exp:
+        if 'wide_resnet' in exp or 'cutout_patch_size' in exp:
             words = exp.split('/')[-1].split('_')
             param_ls.append(words[-2])
             name_ls.append(f'C={words[-2]}, s={words[-1]}')
@@ -264,15 +274,16 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path):
     distmat = np.array(distmat)
     num_layers = len(layer_names)
 
-    # Get vmin and vmax from off-diagonal entries only
-    vmax, vmin = 0, 100
-    for l in range(num_layers):
-        selected_distmat = distmat[l]
-        masked_selected_distmat = selected_distmat[~np.eye(len(selected_distmat), dtype=bool)]
+    # Color scale from off-diagonals only (diagonal is ~0 self-distance and would crush contrast)
+    # vmin, vmax = np.inf, -np.inf
+    # for l in range(num_layers):
+    #     selected_distmat = distmat[l]
+    #     n = len(selected_distmat)
+    #     off_diagonal = selected_distmat[~np.eye(n, dtype=bool)]
 
-        vmax = max(np.max(masked_selected_distmat), vmax)
-        vmin = min(np.min(masked_selected_distmat), vmin)
-    vmin, vmax = 0.35, 0.85
+    #     vmax = max(float(np.max(off_diagonal)), vmax)
+    #     vmin = min(float(np.min(off_diagonal)), vmin)
+    # vmin, vmax = 0.35, 0.85
     row, col = 1, 4
     fig, axes = plt.subplots(row, col, figsize=(col*5, row*4), gridspec_kw={'wspace': 0, 'hspace': 0})
     axes = axes.flatten()
@@ -284,6 +295,11 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path):
 
     for l in range(num_layers):
         selected_distmat = distmat[l]
+        vmin, vmax = np.inf, -np.inf
+        off_diagonal = selected_distmat[~np.eye(len(selected_distmat), dtype=bool)]
+
+        vmax = max(np.max(off_diagonal), vmax)
+        vmin = min(np.min(off_diagonal), vmin)
 
         ax = axes[l]
         sns.heatmap(
@@ -293,7 +309,7 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path):
             xticklabels=network_names,
             yticklabels=network_names,
             vmin=vmin,
-            vmax=vmax+0.1,
+            vmax=vmax,
             ax=ax,
             cbar=True,
             cbar_kws={"shrink": 0.5}
@@ -327,7 +343,7 @@ def visualize_coordinates_2d(coord_list, layer_names, network_names, output_path
     """
     num_layers = len(layer_names)
     rows, cols = 1, 4
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.5, rows * 4))
     axes = axes.flatten()
 
     for ax in axes[num_layers:]:
@@ -544,8 +560,189 @@ def plot_variability_comparison(results, output_path):
     plt.close()
     print(f"Saved to {output_path}/seed_vs_aug_mean_std.png")
 
-def compute_D(D1, D2, D3, D4, sigma):
-    return (D1+D2)/(D3+D4)*sigma
+
+def pairwise_d_seed_d_aug_from_ref_varied(D, n_seeds, stride, ref_flat, var_flat):
+    """D_seed = mean of cross-seed at ref and at var; D_aug = mean of ref→var within each seed."""
+    n_pairs = n_seeds * (n_seeds - 1) // 2
+    d_seed = np.empty(n_pairs, dtype=np.float32)
+    d_aug = np.empty(n_pairs, dtype=np.float32)
+    pair_idx = 0
+    for s0 in range(n_seeds):
+        for s1 in range(s0 + 1, n_seeds):
+            i00 = stride * s0 + ref_flat
+            i0v = stride * s0 + var_flat
+            i10 = stride * s1 + ref_flat
+            i1v = stride * s1 + var_flat
+            D1 = D[i00, i0v]
+            D2 = D[i10, i1v]
+            D3 = D[i00, i10]
+            D4 = D[i0v, i1v]
+            d_seed[pair_idx] = 0.5 * (float(D3) + float(D4))
+            d_aug[pair_idx] = 0.5 * (float(D1) + float(D2))
+            pair_idx += 1
+    return d_seed, d_aug
+
+
+def collect_d_seed_d_aug_per_layer(dist_list, num_layers, n_seeds, n_augs):
+    """Per layer, D_seed / D_aug for a single aug axis: index 0 = clean ref, 1.. = aug levels."""
+    n_pairs = n_seeds * (n_seeds - 1) // 2
+    stride = n_augs
+    all_D_seed_lists = []
+    all_D_aug_lists = []
+
+    for l in range(num_layers):
+        D = dist_list[l]
+        D_seed_lists = np.zeros((n_pairs, n_augs - 1), dtype=np.float32)
+        D_aug_lists = np.zeros((n_pairs, n_augs - 1), dtype=np.float32)
+        for x in range(1, n_augs):
+            ds, da = pairwise_d_seed_d_aug_from_ref_varied(D, n_seeds, stride, 0, x)
+            D_seed_lists[:, x - 1] = ds
+            D_aug_lists[:, x - 1] = da
+        all_D_seed_lists.append(D_seed_lists)
+        all_D_aug_lists.append(D_aug_lists)
+
+    return all_D_seed_lists, all_D_aug_lists, n_pairs
+
+
+def collect_d_seed_d_aug_per_layer_two_param(
+    dist_list, num_layers, n_seeds, n_primary, n_secondary, *, hold_secondary: bool
+):
+    """
+    2D aug grid with flat index ``p * n_secondary + s`` matching
+    ``for p in range(n_primary): for s in range(n_secondary):``.
+
+    If ``hold_secondary``: fix secondary index ``s`` (e.g. σ), ref at smallest primary ``p=0``,
+    sweep primary ``p = 1..n_primary-1``.
+
+    If ``not hold_secondary``: fix primary ``p``, ref at ``s=0``, sweep ``s = 1..n_secondary-1``.
+
+    Returns per layer arrays ``(n_hold, n_pairs, n_sweep)``.
+    """
+    stride = n_primary * n_secondary
+    n_pairs = n_seeds * (n_seeds - 1) // 2
+    if hold_secondary:
+        n_hold = n_secondary
+        n_sweep = n_primary - 1
+    else:
+        n_hold = n_primary
+        n_sweep = n_secondary - 1
+
+    all_D_seed = []
+    all_D_aug = []
+    for l in range(num_layers):
+        D = dist_list[l]
+        S = np.zeros((n_hold, n_pairs, n_sweep), dtype=np.float32)
+        A = np.zeros((n_hold, n_pairs, n_sweep), dtype=np.float32)
+        for hi in range(n_hold):
+            if hold_secondary:
+                ref_flat = hi
+                for si, xp in enumerate(range(1, n_primary)):
+                    var_flat = xp * n_secondary + hi
+                    ds, da = pairwise_d_seed_d_aug_from_ref_varied(
+                        D, n_seeds, stride, ref_flat, var_flat
+                    )
+                    S[hi, :, si] = ds
+                    A[hi, :, si] = da
+            else:
+                ref_flat = hi * n_secondary + 0
+                for si, xs in enumerate(range(1, n_secondary)):
+                    var_flat = hi * n_secondary + xs
+                    ds, da = pairwise_d_seed_d_aug_from_ref_varied(
+                        D, n_seeds, stride, ref_flat, var_flat
+                    )
+                    S[hi, :, si] = ds
+                    A[hi, :, si] = da
+        all_D_seed.append(S)
+        all_D_aug.append(A)
+    return all_D_seed, all_D_aug, n_pairs
+
+
+def plot_d_seed_d_aug_vs_aug(
+    all_D_seed_lists,
+    all_D_aug_lists,
+    aug_param_plot,
+    layer_names,
+    param_name,
+    plot_save_path,
+    n_pairs,
+    num_layers,
+    *,
+    title_suffix: str = "",
+    dpi: float | None = None,
+    bbox_inches: str | None = None,
+):
+    """Mean ± std over seed pairs; vertical dashed line at first aug where mean D_aug > mean D_seed."""
+
+    def _first_x_where_d_aug_exceeds_d_seed(x_vals, mean_aug, mean_seed):
+        x_vals = np.asarray(x_vals, dtype=float)
+        diff = np.asarray(mean_aug, dtype=float) - np.asarray(mean_seed, dtype=float)
+        pos = np.where(diff > 0)[0]
+        if len(pos) == 0:
+            return None
+        return float(x_vals[int(pos[0])])
+
+    fig, axs = plt.subplots(1, num_layers, figsize=(6.5 * num_layers, 4))
+    if num_layers == 1:
+        axs = [axs]
+
+    for l in range(num_layers):
+        ax = axs[l]
+        D_seed_lists = all_D_seed_lists[l]
+        D_aug_lists = all_D_aug_lists[l]
+        mean_seed = D_seed_lists.mean(axis=0)
+        mean_aug = D_aug_lists.mean(axis=0)
+        if n_pairs > 1:
+            std_seed = D_seed_lists.std(axis=0, ddof=1)
+            std_aug = D_aug_lists.std(axis=0, ddof=1)
+        else:
+            std_seed = np.zeros_like(mean_seed)
+            std_aug = np.zeros_like(mean_aug)
+
+        ax.errorbar(
+            aug_param_plot,
+            mean_seed,
+            yerr=std_seed,
+            marker="o",
+            linestyle="-",
+            capsize=3,
+            label=r"$D_{\mathrm{seed}}$",
+        )
+        ax.errorbar(
+            aug_param_plot,
+            mean_aug,
+            yerr=std_aug,
+            marker="s",
+            linestyle="-",
+            capsize=3,
+            label=r"$D_{\mathrm{aug}}$",
+        )
+        xc = _first_x_where_d_aug_exceeds_d_seed(aug_param_plot, mean_aug, mean_seed)
+        if xc is not None:
+            ax.axvline(
+                xc,
+                linestyle="--",
+                color="0.35",
+                linewidth=1.2,
+                zorder=2,
+                label=r"$D_{\mathrm{aug}} > D_{\mathrm{seed}}$",
+            )
+        ax.set_title(
+            f"Layer {layer_names[l]}: D_seed & D_aug vs. {param_name}{title_suffix}"
+        )
+        ax.set_xlabel(param_name)
+        ax.set_ylabel("Distance")
+        ax.legend(fontsize=8)
+
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+
+    plt.tight_layout()
+    _save_kw = {}
+    if bbox_inches is not None:
+        _save_kw["bbox_inches"] = bbox_inches
+    plt.savefig(plot_save_path, **_save_kw, dpi=200)
+    plt.close()
+
 
 def main():
     args = parse_args()
@@ -565,6 +762,7 @@ def main():
     elif args.aug_type == "cutout":
         aug_param = [2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 20.0, 24.0]
 
+
     for seed in seeds:
         result_path = f'{output_path}/results_seed{seed}' if seed != 42 else f'{output_path}/results'
         result_path = f'{result_path}_pretrained' if args.pretrained else result_path
@@ -574,18 +772,25 @@ def main():
 
         pretrain_str = "/pretrained" if args.pretrained else ""
         pretrain_str = f"{pretrain_str}_seed{seed}" if seed != 42 else pretrain_str
-        # experiment_ls = [f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}" for c in [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0] for s in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]]
-        seed_str = f"_seed{seed}" if seed != 42 else ""
-        experiment_ls = [f"clean{seed_str}/exp_{args.model_name}_clean_0.0_0.0"]
-        experiment_ls += [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_{s}_0.0" for s in aug_param]
 
+        seed_str = f"_seed{seed}" if seed != 42 else ""
+        if args.single_param:
+            experiment_ls = [f"clean{seed_str}/exp_{args.model_name}_clean_0.0_0.0"]
+            experiment_ls += [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_{s}_0.0" for s in aug_param]
+        else:
+            experiment_ls = [
+                f"cutout{pretrain_str}/exp_{args.model_name}_cutout_patch_size_{c}_{s}"
+                for c in CUTOUT_PATCH_GRID
+                for s in CUTOUT_SIGMA_GRID
+            ]
+        
         X_train, _, network_names = extract_activity_all(experiment_ls, base_path, args)
         all_Xs.extend(X_train)
         all_network_names.extend(network_names)
 
     # compute procruste's distance between pair of networks
-    num_layers = len(set(all_network_names))
-    print(len(all_network_names), len(all_Xs))
+    num_layers = len(set(all_network_names)) if len(all_network_names) > 0 else 4
+    n_networks = len(all_Xs) if len(all_Xs) > 0 else num_layers*len(seeds)*len(experiment_ls)
 
     dist_list = []
     coord_list = []
@@ -611,7 +816,7 @@ def main():
         print(selected_distmat.shape)
 
         embedding = MDS(
-            n_components=450, #250
+            n_components=250, #450
             metric=True,
             n_init=20,
             max_iter=5000,
@@ -627,84 +832,59 @@ def main():
         coord_list.append(coordinates)
     
     visualize_distance_all(dist_list, layer_names, ['']*len(selected_distmat), f'{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}')
-    visualize_coordinates_2d(coord_list, layer_names, network_names, f'{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}', single_param=True)
+    visualize_coordinates_2d(coord_list, layer_names, network_names, f'{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}', single_param=args.single_param)
 
     results = variability_seeds_vs_augs(dist_list, layer_names, n_seeds=len(seeds), n_augs=len(experiment_ls))
     plot_variability_comparison(results, f'{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}')
-    aug_param_list = [0.0]+aug_param
-    
-    n_seeds = len(seeds)  # fixed
-    n_augs = len(aug_param_list)   # fixed, X0 to X4
-    print(n_seeds, n_augs)
-    # For each layer, collect D values per (s0, s1) pair in a NumPy array, each element tracks D as sigma changes.
-    n_pairs = n_seeds * (n_seeds - 1) // 2  # 3 pairs when n_seeds=3
-    pair_labels = []
-    all_D_lists = []
 
-    for l in range(num_layers):
-        selected_distmat = dist_list[l]
-        # D_lists will be a numpy array of shape (n_pairs, n_augs-1)
-        D_lists = np.zeros((n_pairs, n_augs - 1), dtype=np.float32)
+    n_seeds = len(seeds)
+    if args.single_param:
+        aug_param_list = [0.0] + aug_param
+        n_augs = len(aug_param_list)
+        print(n_seeds, n_augs)
+        all_D_seed_lists, all_D_aug_lists, n_pairs = collect_d_seed_d_aug_per_layer(
+            dist_list, num_layers, n_seeds, n_augs
+        )
+        plot_d_seed_d_aug_vs_aug(
+            all_D_seed_lists,
+            all_D_aug_lists,
+            aug_param_list[1:],
+            layer_names,
+            param_dict[args.aug_type],
+            f"{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}/D_vs_sigma_layers.png",
+            n_pairs,
+            num_layers,
+        )
+    else:
+        n_pri, n_sec = len(CUTOUT_PATCH_GRID), len(CUTOUT_SIGMA_GRID)
+        print(n_seeds, n_pri * n_sec, "two-param grid (largest cutout vs σ)")
+        all_D_seed, all_D_aug, n_pairs = collect_d_seed_d_aug_per_layer_two_param(
+            dist_list,
+            num_layers,
+            n_seeds,
+            n_pri,
+            n_sec,
+            hold_secondary=False,
+        )
+        patch_max_idx = n_pri - 4
+        patch_max = float(CUTOUT_PATCH_GRID[patch_max_idx])
+        all_D_seed_lists = [all_D_seed[l][patch_max_idx] for l in range(num_layers)]
+        all_D_aug_lists = [all_D_aug[l][patch_max_idx] for l in range(num_layers)]
+        sigma_vals = np.asarray(CUTOUT_SIGMA_GRID[1:], dtype=float)
+        plot_d_seed_d_aug_vs_aug(
+            all_D_seed_lists,
+            all_D_aug_lists,
+            sigma_vals,
+            layer_names,
+            "sigma",
+            f"{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}/D_seed_aug_max_cutout_vs_sigma.png",
+            n_pairs,
+            num_layers,
+            title_suffix=f" (cutout_patch_size={patch_max:g})",
+            dpi=300,
+            bbox_inches="tight",
+        )
 
-        for x in range(1, n_augs):
-            aug_param_val = aug_param_list[x]
-            pair_idx = 0
-            # For each pair (s_i, s_j): i != j
-            for s0 in range(n_seeds):
-                for s1 in range(s0 + 1, n_seeds):
-                    idx_X0_s0 = n_augs * s0 + 0
-                    idx_Xx_s0 = n_augs * s0 + x
-                    idx_X0_s1 = n_augs * s1 + 0
-                    idx_Xx_s1 = n_augs * s1 + x
 
-                    # D1: (X0, Xx) for seed s0
-                    D1 = selected_distmat[idx_X0_s0, idx_Xx_s0]
-                    # D2: (X0, Xx) for seed s1
-                    D2 = selected_distmat[idx_X0_s1, idx_Xx_s1]
-                    # D3: (X0, X0) across seeds
-                    D3 = selected_distmat[idx_X0_s0, idx_X0_s1]
-                    # D4: (Xx, Xx) across seeds
-                    D4 = selected_distmat[idx_Xx_s0, idx_Xx_s1]
-
-                    D = compute_D(D1, D2, D3, D4, aug_param_val)
-                    D_lists[pair_idx, x - 1] = D  # Store directly in numpy array
-                    if x == 1:  # only append labels on first aug_param_val, for clarity
-                        if l == 0:
-                            pair_labels.append((s0, s1))
-                    pair_idx += 1
-        all_D_lists.append(D_lists)
-
-    # After D_lists are saved, plot a plot with num_layers subplots
-    import matplotlib.pyplot as plt
-
-    fig, axs = plt.subplots(1, num_layers, figsize=(6 * num_layers, 4), sharey=True)
-    if num_layers == 1:
-        axs = [axs]
-    aug_param_plot = aug_param_list[1:]
-
-    for l in range(num_layers):
-        ax = axs[l]
-        D_lists = all_D_lists[l]
-        for pair_idx, (s0, s1) in enumerate(pair_labels):
-            ax.plot(aug_param_plot, D_lists[pair_idx, :], marker='o', label=f"Seed{s0} vs Seed{s1}")
-        # Add y=x reference line
-        min_x = min(aug_param_plot)
-        max_x = max(aug_param_plot)
-        ax.plot([min_x, max_x], [min_x, max_x], color='gray', linestyle='--', label='y=x')
-        ax.set_title(f'Layer {layer_names[l]}: D vs. {param_dict[args.aug_type]}')
-        ax.set_xlabel(param_dict[args.aug_type])
-        ax.set_ylabel('D')
-        ax.legend()
-
-        for spine in ['top', 'right']:
-            ax.spines[spine].set_visible(False)
- 
-
-    plt.tight_layout()
-    plot_save_path = f"{output_path}/results_seed_combined_{args.model_name}/{args.aug_type}/D_vs_sigma_layers.png"
-    plt.savefig(plot_save_path)
-    plt.close()
- 
-    
 if __name__ == "__main__":
     main()

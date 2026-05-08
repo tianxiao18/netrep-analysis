@@ -10,6 +10,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from netrep.metrics import LinearMetric
+from netrep.validation import check_equal_shapes
 from netrep.activity_extractor import LayerActivityExtractor
 from netrep.dualPCA import DualPCA
 from netrep.visualize import visualize_coordinates_all, visualize_coordinates, visualize_distance, visualize_layer_aligned, visualize_distance_matrices
@@ -161,23 +162,30 @@ def compute_across_network_distances(netA, netB):
     distmat += distmat.T
     return distmat
 
-def compute_distances(X_train, X_test):
+def compute_distances(X_train, X_test, *, align=True):
     distmat = np.zeros((len(X_train), len(X_train)))
     diff_norms = np.zeros((len(X_train), len(X_train), len(X_train[0])))
     total_pairs = len(X_train) * (len(X_train) - 1) // 2
 
-    # use procruste's metrics
     for i, j in tqdm(itertools.combinations(range(len(X_train)), 2), total=total_pairs, desc="Computing distances"):
-        metric = LinearMetric(alpha=1.0, center_columns=True, score_method='angular')
-        metric.fit(X_train[i], X_train[j])
-        dist = metric.score(X_test[i], X_test[j])
-        distmat[i, j] = dist
-
-        # obtain transformed representation
-        if i % 4 == 2 and j % 4 == 2:
-            tX = (X_test[i]-metric.mx_) @ metric.Wx_
-            tY = (X_test[j]-metric.my_) @ metric.Wy_
-            diff_norms[i][j] = np.linalg.norm(tX - tY, axis=1)
+        Xi, Xj = X_test[i].astype(np.float64), X_test[j].astype(np.float64)
+        if align:
+            metric = LinearMetric(alpha=1.0, center_columns=True, score_method='angular')
+            metric.fit(X_train[i], X_train[j])
+            distmat[i, j] = metric.score(X_test[i], X_test[j])
+            if i % 4 == 2 and j % 4 == 2:
+                tX = (Xi - metric.mx_) @ metric.Wx_
+                tY = (Xj - metric.my_) @ metric.Wy_
+                diff_norms[i][j] = np.linalg.norm(tX - tY, axis=1)
+        else:
+            Xi, Xj = check_equal_shapes(Xi, Xj, nd=2, zero_pad=True)
+            Ai = Xi - Xi.mean(axis=0, keepdims=True)
+            Ai = Ai / np.linalg.norm(Ai)
+            Bj = Xj - Xj.mean(axis=0, keepdims=True)
+            Bj = Bj / np.linalg.norm(Bj)
+            distmat[i, j] = np.linalg.norm(Ai - Bj)
+            if i % 4 == 2 and j % 4 == 2:
+                diff_norms[i][j] = np.linalg.norm(Ai - Bj, axis=1)
 
     distmat += distmat.T
     return distmat, diff_norms
@@ -537,8 +545,10 @@ def get_experiments_name_all_aug(model_name, param_dict, seed=42):
     experiment_ls += [f"crop/exp_{model_name}_{param_dict['crop']}_{c}_0.0" for c in [0.6, 0.7, 0.8, 0.9]]
     return experiment_ls
 
-def get_experiments_name_two_aug(model_name, param_dict, aug1, aug2, aug1_params, aug2_params):
-    experiment_ls = []
+def get_experiments_name_two_aug(model_name, param_dict, aug1, aug2, aug1_params, aug2_params, seed=42):
+    seed_str = f"_seed{seed}" if seed else ""
+    experiment_ls = [f"clean{seed_str}/exp_{model_name}_{param_dict['clean']}_0.0_0.0"]
+
     for idx_c, c in enumerate(aug1_params):
         for idx_s, s in enumerate(aug2_params):
             if idx_c != idx_s:
@@ -571,17 +581,17 @@ def main():
     pretrain_str = "/pretrained" if args.pretrained else ""
     pretrain_str = f"{pretrain_str}_seed{args.seed}" if args.seed else pretrain_str
 
-    aug1_param = [0.01, 0.02, 0.03, 0.04]
-    aug2_param = [0.0, 0.0, 0.0, 0.0]
-    # aug1_param = [48.0, 80.0, 112.0]
-    # aug2_param = [0.2, 0.5, 0.8]
+    # aug1_param = [0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.15, 0.2]
+    # aug2_param = [0.0]
+    aug1_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
+    aug2_param = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
     model_name = "resnet" if args.model_name == 'resnet50' else args.model_name
     if args.aug_type == "combined":
         experiment_ls = get_experiments_name_all_aug(model_name, param_dict, args.seed)
     elif args.aug_type == "two":
-        aug_param = [24.0, 24.0, 0.4, 0.1, 0.04, 0.2, 0.9]
-        aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "crop"]
-        experiment_ls = get_experiments_name_two_aug(model_name, param_dict, aug_types, aug_types, aug_param, aug_param)
+        aug_param = [24.0, 24.0, 0.4, 0.1, 0.04, 0.2, 8.0, 0.9]
+        aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "cutout", "crop"]
+        experiment_ls = get_experiments_name_two_aug(model_name, param_dict, aug_types, aug_types, aug_param, aug_param, args.seed)
     else:
         experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
     print(experiment_ls)
@@ -640,11 +650,19 @@ def main():
             distmat = compute_distances_arccos_cka(X_train)
             np.save(f'{result_path}/cka_distance_matrix.npy', distmat)
 
+    if args.metric == "unaligned":
+        if args.load_pca and os.path.isfile(f"{result_path}/unaligned_distance_matrix.npy"):
+            distmat = np.load(f"{result_path}/unaligned_distance_matrix.npy")
+        else:
+            distmat, norms = compute_distances(X_train, X_train, align=False)
+            np.save(f'{result_path}/unaligned_distance_matrix.npy', distmat)
+
     # compute diff norms from origin to each augmented shape
     # origin_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_0.0_0.0"]
     # X_train_origin, _, network_names = extract_activity_all(origin_ls, base_path, args)
     # compute_diff_norms(X_train, X_train_origin)
 
+    print("Distance matrix shape:", distmat.shape)
     if 'all' in args.experiment:
         l = len(network_names) // len(experiment_ls)
         expanded_experiment_ls = [exp for exp in experiment_ls for _ in range(l)]

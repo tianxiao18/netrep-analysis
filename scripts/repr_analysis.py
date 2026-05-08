@@ -39,6 +39,13 @@ import matplotlib.patches as mpatches
 import matplotlib.tri as mtri
 from matplotlib.collections import PolyCollection
 
+_MDS_AXIS_LABELSIZE = 15
+_MDS_TICK_LABELSIZE = 11
+
+# Distance-matrix heatmaps: prominent axis titles; tick size tuned to limit overlap when many nets
+_DIST_AXIS_LABELSIZE = 14
+_DIST_TICK_LABELSIZE = 10
+
 def parse_args():
     parser = ArgumentParser(description="PyTorch Resnet Trainer")
     parser.add_argument(
@@ -129,6 +136,11 @@ def exp_to_name(exp_ls):
             param_ls.append(words[-2])
             name_ls.append(f'C={words[-2]}, s={words[-1]}')
             continue
+        if 'cutout_patch_size' in exp:
+            words = exp.split('/')[-1].split('_')
+            param_ls.append(words[-2])
+            name_ls.append(f'C={words[-2]}')
+            continue
         if 'rot_deg' in exp and '0.0' not in exp:
             words = exp.split('/')[-1].split('_')
             param_ls.append(words[-3])
@@ -165,28 +177,75 @@ def exp_to_name(exp_ls):
 
     return name_ls, param_ls
 
+
+def modality_order_from_experiment_ls(exp_ls):
+    """First path segment of each experiment (after clean), unique in first-seen order.
+
+    Matches ``get_experiments_name_two_aug``: index ``i`` corresponds to aug slot ``idx_c``.
+    """
+    out = []
+    for exp in exp_ls[1:]:
+        prim = exp.split("/")[0]
+        if prim not in out:
+            out.append(prim)
+    return out
+
+
+def _compact_distance_ticklabels(names):
+    """If every name is key=value with the same key, return short labels (values only).
+
+    Returns (labels_for_plot, axis_label). axis_label is a readable key for the axis when
+    compacting; otherwise None to keep the generic "Network" label.
+    """
+    names = [str(n) for n in names]
+    if not names:
+        return names, None
+    keys, vals = [], []
+    for n in names:
+        if "=" not in n:
+            return names, None
+        k, v = n.split("=", 1)
+        keys.append(k.strip())
+        vals.append(v.strip())
+    if len(set(keys)) != 1:
+        return names, None
+    key = keys[0]
+    axis_label = key.replace("_", " ")
+    return vals, axis_label
+
+
 def visualize_distance_all(distmat, layer_names, network_names, output_path, metric="procrustes"):
     distmat = np.array(distmat)
     num_layers = len(layer_names)
 
     # Get vmin and vmax from off-diagonal entries only
-    vmax, vmin = 0, 100
-    for l in range(num_layers):
-        indices = np.arange(l, distmat.shape[0], num_layers)
-        selected_distmat = distmat[indices[:, None], indices]
-        masked_selected_distmat = selected_distmat[~np.eye(len(selected_distmat), dtype=bool)]
+    # vmax, vmin = 0, 100
+    # for l in range(num_layers):
+    #     indices = np.arange(l, distmat.shape[0], num_layers)
+    #     selected_distmat = distmat[indices[:, None], indices]
+    #     masked_selected_distmat = selected_distmat[~np.eye(len(selected_distmat), dtype=bool)]
 
-        vmax = max(np.max(masked_selected_distmat), vmax)
-        vmin = min(np.min(masked_selected_distmat), vmin)
+    #     vmax = max(np.max(masked_selected_distmat), vmax)
+    #     vmin = min(np.min(masked_selected_distmat), vmin)
 
-    row, col = 4, len(network_names)//4
-    fig, axes = plt.subplots(row, col, figsize=(col*5, row*4), gridspec_kw={'wspace': 0, 'hspace': 0})
+    row, col = 1, len(layer_names)//1
+    fig, axes = plt.subplots(row, col, figsize=(col * 5, row * 4.7), gridspec_kw={'wspace': 0.06, 'hspace': 0})
     axes = axes.flatten()
     print(layer_names)
 
+    tick_names, axis_label_hint = _compact_distance_ticklabels(network_names)
+
     sns.set(style='white')
-    plt.rcParams.update({'axes.titlesize': 14, 'axes.labelsize': 12, 'xtick.labelsize': 10,
-                        'ytick.labelsize': 10, 'axes.titlesize': 16})
+
+    n_tick = len(tick_names)
+    max_tw = max((len(str(t)) for t in tick_names), default=0)
+    # More grids → tilt labels earlier; shallow rotation when borderline keeps labels readable vs overlap
+    if max_tw <= 5 and n_tick <= 14:
+        rot_x, ha_x = 0, "center"
+    elif max_tw <= 10 and n_tick <= 22:
+        rot_x, ha_x = 38, "right"
+    else:
+        rot_x, ha_x = 52, "right"
 
     for l in range(num_layers):
         indices = np.arange(l, distmat.shape[0], num_layers)
@@ -197,29 +256,47 @@ def visualize_distance_all(distmat, layer_names, network_names, output_path, met
             selected_distmat,
             cmap="viridis",
             square=True,
-            xticklabels=network_names,
-            yticklabels=network_names,
-            vmin=vmin,
-            vmax=vmax+0.1,
+            xticklabels=tick_names,
+            yticklabels=tick_names,
+            # vmin=vmin,
+            # vmax=vmax+0.1,
+            vmin=selected_distmat[np.triu_indices(selected_distmat.shape[0], k=1)].min(),
+            vmax=selected_distmat[np.triu_indices(selected_distmat.shape[0], k=1)].max(),
             ax=ax,
             cbar=True,
             cbar_kws={"shrink": 0.5}
         )
         title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
-        ax.set_title(title)
-        ax.set_xlabel("Network")
-        ax.set_ylabel("Network")
+        ax.set_title(title, fontsize=13)
 
+        plt.setp(
+            ax.get_xticklabels(),
+            rotation=rot_x,
+            ha=ha_x,
+            fontsize=_DIST_TICK_LABELSIZE,
+        )
+        plt.setp(ax.get_yticklabels(), fontsize=_DIST_TICK_LABELSIZE)
+
+        axis_lbl = axis_label_hint if axis_label_hint is not None else "Network"
+        x_labelpad = 10 if rot_x else 7
+        y_labelpad = 7
+        ax.set_xlabel(axis_lbl, fontsize=_DIST_AXIS_LABELSIZE, labelpad=x_labelpad)
+        ax.set_ylabel(axis_lbl, fontsize=_DIST_AXIS_LABELSIZE, labelpad=y_labelpad)
         if l % col > 0:
-            ax.set_ylabel('')
+            ax.set_ylabel("")
             ax.set_yticklabels([])
         if l < (row - 1) * col:
-            ax.set_xlabel('')
+            ax.set_xlabel("")
             ax.set_xticklabels([])
 
-    plt.tight_layout()
-    metric_str = "cka_" if metric == "cka" else ""
-    plt.savefig(f'{output_path}/{metric_str}dist.png', dpi=200)
+    plt.tight_layout(pad=0.6)
+    metric_str = "" if metric == "procrustes" else f"{metric}_"
+    plt.savefig(
+        f'{output_path}/{metric_str}dist.png',
+        dpi=200,
+        bbox_inches="tight",
+        pad_inches=0.18,
+    )
     np.save(f'{output_path}/{metric_str}distance_matrix.npy', distmat)
     print(f"Saving to {output_path}/{metric_str}dist.png")
     plt.close()
@@ -312,7 +389,7 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path, m
     s_to_idx = {s: i for i, s in enumerate(s_vals)}
 
     color_values = np.linspace(0.3, 1.0, len(C_vals))
-    color_maps = [cm.Purples, cm.Blues, cm.Greens, cm.Oranges]
+    color_maps = [cm.Purples, cm.Blues, cm.Oranges, cm.Greens]
     C_colors = [cmap(color_values) for cmap in color_maps]
     base_shapes = ['o', 's', '^', 'D', 'v', '<', '>', 'h', '*', 'p', 'x']
     s_shapes = list(itertools.islice(itertools.cycle(base_shapes), len(s_vals)))
@@ -350,11 +427,12 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path, m
 
         title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
         ax.set_title(title)
-        ax.set_xlabel("PC 1")
-        ax.set_ylabel("PC 2")
+        ax.set_xlabel("PC 1", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.set_ylabel("PC 2", fontsize=_MDS_AXIS_LABELSIZE)
 
         for spine in ['top', 'right']:
             ax.spines[spine].set_visible(False)
+        ax.tick_params(axis="both", which="major", labelsize=_MDS_TICK_LABELSIZE)
 
         special_path = [(0.0, 0.0),(12.0, 0.2),(12.0, 0.3),(12.0, 0.5),(12.0, 1.0)]
 
@@ -368,6 +446,9 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path, m
             pts = coordinates[special_indices]
             for i in range(1, len(pts)):
                 ax.plot([pts[0,0],pts[i,0]], [pts[0,1],pts[i,1]], linestyle=":", color="gray", zorder=0)
+
+        # Autoscale uses marker centers only; large s=150 disks extend past limits and clip.
+        ax.margins(0.14)
             
     # Colorbar with correct colormap for each subplot
     for l, ax in enumerate(axes[:num_layers]):
@@ -375,7 +456,8 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path, m
         sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label('C value')
+        cbar.set_label('C value', fontsize=_MDS_AXIS_LABELSIZE)
+        cbar.ax.tick_params(labelsize=_MDS_TICK_LABELSIZE)
 
     # Add legend for marker shape
     # from matplotlib.lines import Line2D
@@ -391,7 +473,7 @@ def visualize_coordinates_2d(distmat, layer_names, network_names, output_path, m
     # )
 
     plt.tight_layout()
-    metric_str = "cka_" if metric == "cka" else ""
+    metric_str = "" if metric == "procrustes" else f"{metric}_"
     plt.savefig(f'{output_path}/{metric_str}mds_embedding.png', dpi=200)
     print(f"Saved to {output_path}/{metric_str}mds_embedding.png")
     plt.close()
@@ -464,17 +546,109 @@ def visualize_coordinates_2d_all_augmentation(distmat, layer_names, network_name
 
         title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
         ax.set_title(title)
-        ax.set_xlabel("PC 1")
-        ax.set_ylabel("PC 2")
+        ax.set_xlabel("PC 1", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.set_ylabel("PC 2", fontsize=_MDS_AXIS_LABELSIZE)
         # ax.set_xlim(-0.1, 0.1)
         # ax.set_ylim(-0.1, 0.1)
         ax.legend(legend_handles, legend_labels, fontsize=9, frameon=False)
-
+        ax.tick_params(axis="both", which="major", labelsize=_MDS_TICK_LABELSIZE)
+        ax.margins(0.14)
 
     plt.tight_layout()
     plt.savefig(f'{output_path}/mds_embedding.png', dpi=200)
     print(f"Saved to {output_path}/mds_embedding.png")
     plt.close()
+
+
+def _primary_aug_rgb(name):
+    k = name.strip().lower().replace("-", "_")
+    k = {"shear": "sheer"}.get(k, k)
+    grp = (
+        frozenset({"rotate", "sheer", "shear"}),
+        frozenset({"jitter", "grayscale"}),
+        frozenset({"gaussian_noise", "sp_noise"}),
+        frozenset({"cutout", "crop"}),
+    )
+    cols = ("#377eb8", "#4daf4a", "#984ea3", "#ff7f00")
+    return next((cols[i] for i, g in enumerate(grp) if k in g), "#7f7f7f")
+
+
+def visualize_coordinates_2d_two_augmentation(distmat, layer_names, network_names, output_path, experiment_ls):
+    """Rows = primary aug folder; cols = stage. Marker discriminates paired aug; color encodes paired family (four colors)."""
+    nn = len(network_names)
+    mods = modality_order_from_experiment_ls(experiment_ls)
+    n = len(mods)
+    pairs = [(i, j) for i in range(n) for j in range(n) if i != j]
+    expected = len(pairs) + 1
+    if nn != expected:
+        raise ValueError(f"two-aug: expected {expected} nets, got {nn} (n={n})")
+
+    sh = ["o", "s", "^", "D", "v", "<", ">", "p", "*"]
+    L = len(layer_names)
+    fig, axes = plt.subplots(n, L, figsize=(4.2 * L, 2.4 * n), squeeze=False, layout="constrained")
+
+    coord_list = []
+    for l in range(L):
+        idx = np.arange(l, distmat.shape[0], L)
+        sub = distmat[idx[:, None], idx]
+        mds = MDS(n_components=200, metric=True, eps=1e-5,
+                  normalized_stress="auto", dissimilarity="precomputed", random_state=42)
+        Z = mds.fit_transform(np.abs(np.real(sub)))
+        print(f"Layer {layer_names[l]} stress: {mds.stress_:.4f}")
+        coord_list.append(PCA(n_components=2, random_state=42).fit_transform(Z))
+
+    def group_inds(ai):
+        o = sorted([(j, p) for p, (ci, j) in enumerate(pairs) if ci == ai])
+        return [1 + p for _, p in o]
+
+    groups = [group_inds(ai) for ai in range(n)]
+
+    pair_handles = [
+        mlines.Line2D([], [], color=_primary_aug_rgb(mods[j]), marker=sh[j % 9],
+                      linestyle="None", markersize=9, label=mods[j])
+        for j in range(n)
+    ]
+    clean_handle = mlines.Line2D([], [], color="black", marker="o", linestyle="None", markersize=9, label="clean")
+
+    for row in range(n):
+        for l in range(L):
+            ax = axes[row, l]
+            XY = coord_list[l]
+            ax.scatter(XY[0, 0], XY[0, 1], c="black", s=120, marker="o", zorder=5, edgecolors="none")
+            for net_i in groups[row]:
+                _, jb = pairs[net_i - 1]
+                ax.scatter(XY[net_i, 0], XY[net_i, 1], marker=sh[jb % 9],
+                           color=_primary_aug_rgb(mods[jb]), s=110, zorder=3, edgecolors="none")
+            t = layer_names[l]
+            if row == 0:
+                ax.set_title(".".join(t.split(".")[1:]) if "." in t else t)
+            if l == 0:
+                ax.annotate(
+                    mods[row], xy=(0, 0.5), xycoords="axes fraction", xytext=(-42, 0),
+                    textcoords="offset points", va="center", ha="right", fontsize=9, fontweight="bold",
+                    color="0.2",
+                )
+            for sp in ("top", "right"):
+                ax.spines[sp].set_visible(False)
+            ax.tick_params(axis="both", which="major", labelsize=_MDS_TICK_LABELSIZE)
+
+    fig.supxlabel("PC 1", fontsize=_MDS_AXIS_LABELSIZE)
+    fig.supylabel("PC 2", fontsize=_MDS_AXIS_LABELSIZE)
+    leg_all = [clean_handle] + pair_handles
+    fig.legend(
+        handles=leg_all,
+        labels=[h.get_label() for h in leg_all],
+        title="paired aug — shape + one of four family colors",
+        loc="outside lower center",
+        ncol=min(14, len(leg_all)),
+        frameon=False,
+        fontsize=7,
+    )
+
+    out = f"{output_path}/mds_embedding_two_aug.png"
+    plt.savefig(out, dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"Saved to {out}")
 
 def visualize_coordinates_3d_plotly(distmat, layer_names, network_names, output_path, metric="procrustes"):
     """
@@ -691,7 +865,7 @@ def visualize_coordinates_3d_plotly(distmat, layer_names, network_names, output_
         margin=dict(l=10, r=10, t=50, b=10),
     )
 
-    metric_str = "cka_" if metric == "cka" else ""
+    metric_str = "" if metric == "procrustes" else f"{metric}_"
     out_html = os.path.join(output_path, f"{metric_str}mds_embedding_3d.html")
     fig.write_html(out_html)
     print(f"Saved interactive plot to {out_html}")
@@ -776,9 +950,12 @@ def visualize_coordinates_3d(distmat, layer_names, network_names, output_path, m
 
         title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
         ax.set_title(title)
-        ax.set_xlabel("MDS PC 1")
-        ax.set_ylabel("MDS PC 2")
-        ax.set_zlabel("MDS PC 3")
+        ax.set_xlabel("MDS PC 1", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.set_ylabel("MDS PC 2", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.set_zlabel("MDS PC 3", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.tick_params(axis="x", labelsize=_MDS_TICK_LABELSIZE)
+        ax.tick_params(axis="y", labelsize=_MDS_TICK_LABELSIZE)
+        ax.tick_params(axis="z", labelsize=_MDS_TICK_LABELSIZE)
 
         for spine in ['top', 'right']:
             ax.spines[spine].set_visible(False)
@@ -899,17 +1076,19 @@ def visualize_gaussian_curvature(distmat, layer_names, network_names, output_pat
        
         title = '.'.join(layer_names[l].split('.')[1:]) if '.' in layer_names[l] else layer_names[l]
         ax.set_title(title)
-        ax.set_xlabel("PC 1")
-        ax.set_ylabel("PC 2")
+        ax.set_xlabel("PC 1", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.set_ylabel("PC 2", fontsize=_MDS_AXIS_LABELSIZE)
 
         for spine in ['top', 'right']:
             ax.spines[spine].set_visible(False)
+        ax.tick_params(axis="both", which="major", labelsize=_MDS_TICK_LABELSIZE)
 
     plt.tight_layout()
     sm = plt.cm.ScalarMappable(cmap=cm.coolwarm, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=axes, location='right', shrink=0.8, pad=0.01)
-    cbar.set_label("Gaussian Curvature")
+    cbar.set_label("Gaussian Curvature", fontsize=_MDS_AXIS_LABELSIZE)
+    cbar.ax.tick_params(labelsize=_MDS_TICK_LABELSIZE)
     plt.savefig(f'{output_path}/gaussian_curvature.png')
     print(f"Saved to {output_path}/gaussian_curvature.png")
     plt.close()
@@ -980,8 +1159,8 @@ def visualize_coordinates_all(distmat, layer_names, network_names, output_path):
         ax.plot(coordinates[:, 0], coordinates[:, 1], color='gray', alpha=0.5, linestyle='--')
 
         ax.set_title('.'.join(layer_names[l].split('.')[1:]))
-        ax.set_xlabel("PC 1")
-        ax.set_ylabel("PC 2")
+        ax.set_xlabel("PC 1", fontsize=_MDS_AXIS_LABELSIZE)
+        ax.set_ylabel("PC 2", fontsize=_MDS_AXIS_LABELSIZE)
         ax.legend(fontsize=8, labelspacing=0.8, frameon=False)
 
         ax.set_xlim(x_min, x_max)
@@ -989,6 +1168,7 @@ def visualize_coordinates_all(distmat, layer_names, network_names, output_path):
 
         for spine in ['top', 'right']:
             ax.spines[spine].set_visible(False)
+        ax.tick_params(axis="both", which="major", labelsize=_MDS_TICK_LABELSIZE)
 
     plt.tight_layout()
     plt.savefig(f'{output_path}/mds_embedding.png')
@@ -1191,7 +1371,16 @@ def visualize_angles(angles, layer_names, network_names, output_path, symbol="T"
     plt.savefig(f"{output_path}/angles_{symbol}.png", dpi=300)
     plt.close()
     print(f"Saved to {output_path}/angles_{symbol}.png")
-    
+
+def get_experiments_name_two_aug(model_name, param_dict, aug1, aug2, aug1_params, aug2_params, seed=42):
+    seed_str = f"_seed{seed}" if seed else ""
+    experiment_ls = [f"clean{seed_str}/exp_{model_name}_{param_dict['clean']}_0.0_0.0"]
+
+    for idx_c, c in enumerate(aug1_params):
+        for idx_s, s in enumerate(aug2_params):
+            if idx_c != idx_s:
+                experiment_ls.append(f"{aug1[idx_c]}/exp_{model_name}_{param_dict[aug1[idx_c]]}_{c}_{aug2[idx_s]}_{param_dict[aug2[idx_s]]}{s}_0.0")
+    return experiment_ls
 
 def compare_angles(angles, layer_names, network_names, output_path):
     num_layers = len(layer_names)
@@ -1329,13 +1518,17 @@ def main():
                   "jitter": "cj_strength", "grayscale": "gray_prob",
                   "cutout_only": "cutout_patch_size", "crop": "extra_crop_scale"}
 
+    # aug1_param = [0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.15, 0.2]
+    # aug2_param = [0.0]
     aug1_param = [4.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0]
     aug2_param = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
-    # aug1_param = [48.0, 80.0, 112.0]
-    # aug2_param = [0.2, 0.5, 0.8]
     # experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
     if args.aug_type == "combined":
         experiment_ls = get_experiments_name_all_aug(args.model_name, param_dict)
+    elif args.aug_type == "two":
+        aug_param = [24.0, 24.0, 0.4, 0.1, 0.04, 0.2, 8.0, 0.9]
+        aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "cutout", "crop"]
+        experiment_ls = get_experiments_name_two_aug(args.model_name, param_dict, aug_types, aug_types, aug_param, aug_param, args.seed)
     else:
         experiment_ls = [f"{args.aug_type}{pretrain_str}/exp_{args.model_name}_{param_dict[args.aug_type]}_{c}_{s}" for c in aug1_param for s in aug2_param]
 
@@ -1343,15 +1536,19 @@ def main():
         distmat = np.load(f"{result_path}/cka_distance_matrix.npy")
     elif args.metric == "procrustes":
         distmat = np.load(f"{result_path}/distance_matrix.npy")
+    elif args.metric == "unaligned":
+        distmat = np.load(f"{result_path}/unaligned_distance_matrix.npy")
     else:
         raise ValueError(f"Invalid metric: {args.metric}")
     # network_indices = [1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 2.3, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 4.0, 4.1, 4.2]
-    # network_indices = [3.1, 4.1]
-    # network_names = [f'module.layer{i}' for i in network_indices] + ['avgpool']
-    network_names = [f'stage {i}' for i in range(1, 5)]
+    network_indices = [2.1, 3.1, 4.1]
+    if args.model_name == "resnet18":
+        network_names = [f'module.layer{i}' for i in network_indices] + ['avgpool']
+    else:
+        network_names = [f'stage {i}' for i in range(1, 5)]
 
-    diff_norms = np.load(f"{result_path}/diff_norms.npy")
-    visualize_diff_norms(diff_norms, len(network_names), args.data_path, save_dir=output_path)
+    # diff_norms = np.load(f"{result_path}/diff_norms.npy")
+    # visualize_diff_norms(diff_norms, len(network_names), args.data_path, save_dir=output_path)
 
     l = len(network_names)
     name_ls = exp_to_name(experiment_ls)[0]
@@ -1376,6 +1573,10 @@ def main():
 
     if args.aug_type == "combined":
         visualize_coordinates_2d_all_augmentation(distmat, network_names, name_ls, output_path)
+    elif args.aug_type == "two":
+        visualize_coordinates_2d_two_augmentation(
+            distmat, network_names, name_ls, output_path, experiment_ls
+        )
     else:
         visualize_coordinates_2d(distmat, network_names, name_ls, output_path, metric=args.metric)
         visualize_coordinates_3d_plotly(distmat, network_names, name_ls, output_path, metric=args.metric)

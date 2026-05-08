@@ -40,14 +40,17 @@ def get_model(device, model_name="resnet50", checkpoint=None, pretrained=False, 
         # model.features.conv0 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         # model.features.pool0 = nn.Identity()
     elif model_name == "resnet18":
-        if pretrained: 
+        if pretrained:
             print("Using pretrained weights from Imagenet...")
             model = resnet18(weights="DEFAULT")
         else:
             model = resnet18(weights=None)
-        model.conv1.stride = (1, 1)
-        model.maxpool = nn.Identity()
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
+            # CIFAR-sized inputs only; keep standard stem for ImageNet (num_classes==1000).
+            if num_classes != 1000:
+                model.conv1.stride = (1, 1)
+                model.maxpool = nn.Identity()
+        if model.fc.out_features != num_classes:
+            model.fc = nn.Linear(model.fc.in_features, num_classes)
     else:  # ResNet50
         if pretrained:
             model = models.resnet50(weights="DEFAULT")
@@ -57,7 +60,8 @@ def get_model(device, model_name="resnet50", checkpoint=None, pretrained=False, 
                 # Use CIFAR-friendly stem only for small images
                 model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
                 model.maxpool = nn.Identity()
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        if model.fc.out_features != num_classes:
+            model.fc = nn.Linear(model.fc.in_features, num_classes)
 
     model = torch.nn.DataParallel(model)
 

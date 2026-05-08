@@ -61,7 +61,7 @@ def get_onecycle_lr_scheduler(optimizer, steps_per_epoch, warmup_epochs, args, p
         cycle_momentum=momentum_flag
     )
 
-def train(model, dataloader, criterion, optimizer, lr_scheduler, device):
+def train(model, dataloader, criterion, optimizer, lr_scheduler, device, step_scheduler_every_batch=True):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
     pbar = tqdm(dataloader, desc="Training", leave=False)
@@ -74,7 +74,8 @@ def train(model, dataloader, criterion, optimizer, lr_scheduler, device):
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        lr_scheduler.step()
+        if lr_scheduler is not None and step_scheduler_every_batch:
+            lr_scheduler.step()
 
         total_loss += loss.item() * images.size(0)
         _, preds = outputs.max(1)

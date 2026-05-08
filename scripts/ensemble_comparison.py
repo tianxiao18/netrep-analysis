@@ -10,6 +10,7 @@ import os
 import sys
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
@@ -266,6 +267,13 @@ def plot_permutation_test(x, y, title, n_permutations=10000, seed=42):
     print(f"[{title}] r = {r_obs}, p = {p_value}")
     return r_obs, p_value
 
+def get_experiments_name_two_aug(model_name, param_dict, aug1, aug2, aug1_params, aug2_params):
+    experiment_ls = []
+    for idx_c, c in enumerate(aug1_params):
+        for idx_s, s in enumerate(aug2_params):
+            if idx_c != idx_s:
+                experiment_ls.append(f"{aug1[idx_c]}/exp_{model_name}_{param_dict[aug1[idx_c]]}_{c}_{aug2[idx_s]}_{param_dict[aug2[idx_s]]}{s}_0.0")
+    return experiment_ls
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -277,11 +285,12 @@ def set_seed(seed=42):
 if __name__ == "__main__":
     args = parse_args()
     set_seed(42)
-    layer = 'layer2.1'
+    layer = 'avgpool'
 
     base_path = '/mnt/home/the10/ceph/results/netrep'
     results_path = '/mnt/home/the10/netrep-analysis/results'
     output_path = f'{base_path}/experiments'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(args.dataset, args.model_name)
 
     param_dict = {"fixed_blur": "sigma", "weak_random_blur": "temp", 
@@ -297,6 +306,7 @@ if __name__ == "__main__":
 
     angle_matrices = np.load(f"{results_path}/{layer}_angle_matrix.npy")
 
+    # compute n x n ensemble accuracy matrix
     if not os.path.isfile(f"{results_path}/{layer}_ensemble_accuracy.npy"):
         ensemble_accuracy = np.zeros((n_augs, n_augs))
         for i in range(n_augs):
@@ -309,7 +319,7 @@ if __name__ == "__main__":
                     image_folder=args.data_path,        
                     dataset_kind=args.dataset,
                     batch_size=args.batch_size,
-                    device="cuda",
+                    device=device,
                     method=args.method,               
                 )
                 
@@ -318,50 +328,95 @@ if __name__ == "__main__":
                 
                 for exp in exps:
                     single_acc = evaluate_ensemble(model_name=args.model_name, ckpt_paths=[exp], method=args.method,
-                    image_folder=args.data_path, dataset_kind=args.dataset, batch_size=args.batch_size, device="cuda")
+                    image_folder=args.data_path, dataset_kind=args.dataset, batch_size=args.batch_size, device=device)
                     all_accs.append(single_acc)
                 
                 ensemble_accuracy[i][j] = acc - sum(all_accs)/len(all_accs)
 
+        print(f"Saving ensemble accuracy to {results_path}/{layer}_ensemble_accuracy.npy")
         np.save(f"{results_path}/{layer}_ensemble_accuracy.npy", ensemble_accuracy)
     else:
+        print(f"Loading ensemble accuracy from {results_path}/{layer}_ensemble_accuracy.npy")
         ensemble_accuracy = np.load(f"{results_path}/{layer}_ensemble_accuracy.npy")
 
-    import pandas as pd
-    import seaborn as sns
+    combined_aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "cutout", "crop"]
+    combined_max_params = {
+        "rotate":        ("rot_deg",          "24.0"),
+        "sheer":         ("shear_deg",         "24.0"),
+        "jitter":        ("cj_strength",       "0.4"),
+        "grayscale":     ("gray_prob",         "0.1"),
+        "gaussian_noise":("noise_std",         "0.04"),
+        "sp_noise":      ("sp_prob",           "0.2"),
+        "cutout":        ("cutout_patch_size",  "8.0"),
+        "crop":          ("extra_crop_scale",  "0.9"),
+    }
+    n_combined = len(combined_aug_types)
 
-    # Read and process CSV for 7x7 augmentation accuracy heatmap
-    df = pd.read_csv(os.path.join(results_path, "wandb_export_2026-03-28T23_25_09.645-04_00.csv"))
+    def get_single_aug_ckpt_path(aug):
+        p1name, p1val = combined_max_params[aug]
+        exp_dir = f"exp_{args.model_name}_{p1name}_{p1val}_0.0"
+        return os.path.join(output_path, aug, exp_dir, "checkpoints", "final_model.pth")
 
-    aug_types = ["rotate", "sheer", "jitter", "grayscale", "gaussian_noise", "sp_noise", "cutout", "crop"]
-    idx = {a: i for i, a in enumerate(aug_types)}
-    combined_accuracy = np.full((n_augs, n_augs), np.nan)
+    def get_combined_aug_ckpt_path(aug1, aug2):
+        p1name, p1val = combined_max_params[aug1]
+        p2name, p2val = combined_max_params[aug2]
+        exp_dir = f"exp_{args.model_name}_{p1name}_{p1val}_{aug2}_{p2name}{p2val}_0.0"
+        return os.path.join(output_path, aug1, exp_dir, "checkpoints", "final_model.pth")
 
-    for _, r in df.iterrows():
-        # get only the two aug names used in the experiment
-        augs = [a for a in aug_types if f"_{a}_" in "_" + r["Name"] + "_"]
-        if len(augs) == 2:
-            i, j = idx[augs[0]], idx[augs[1]]
-            combined_accuracy[i, j] = combined_accuracy[j, i] = r["val_acc"]
-
+    # compute n x n combined accuracy matrix
+    combined_accuracy_cache_path = f"{results_path}/combined_accuracy_{layer}.npy"
+    if os.path.isfile(combined_accuracy_cache_path):
+        print(f"Loading combined_accuracy from cache: {combined_accuracy_cache_path}")
+        combined_accuracy = np.load(combined_accuracy_cache_path)
+    else:
+        print(f"Computing combined_accuracy and saving to cache: {combined_accuracy_cache_path}")
+        combined_accuracy = np.full((n_combined, n_combined), np.nan)
+        for i, aug1 in enumerate(combined_aug_types):
+            for j, aug2 in enumerate(combined_aug_types):
+                ckpt = get_single_aug_ckpt_path(aug1) if i == j else get_combined_aug_ckpt_path(aug1, aug2)
+                if not os.path.isfile(ckpt):
+                    print(f"  [warn] missing checkpoint: {ckpt}")
+                    continue
+                acc = evaluate_ensemble(
+                    model_name=args.model_name,
+                    ckpt_paths=[ckpt],
+                    image_folder=args.data_path,
+                    dataset_kind=args.dataset,
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    device=device,
+                    method=args.method,
+                )
+                label = f"{aug1}+{aug2}" if i != j else aug1
+                print(f"  {label}: {acc:.4f}")
+                combined_accuracy[i, j] = acc
+        np.save(combined_accuracy_cache_path, combined_accuracy)
+      
     plt.figure(figsize=(7, 6))
-    sns.heatmap(combined_accuracy, xticklabels=aug_types, yticklabels=aug_types, annot=True, cmap="viridis", fmt=".2f")
+    combined_accuracy = combined_accuracy - 1/2* (np.diag(combined_accuracy)[:, None] + np.diag(combined_accuracy)[None, :])
+    sns.heatmap(combined_accuracy, xticklabels=combined_aug_types, yticklabels=combined_aug_types,
+                annot=True, cmap="viridis", fmt=".3f")
     plt.title("Accuracy for Combined Augmentation Types")
     plt.tight_layout()
-    plt.savefig(f"{results_path}/augmentation_pair_accuracy_heatmap.png")
+    plt.savefig(f"{results_path}/{layer}_augmentation_pair_accuracy_heatmap.png")
 
+    # plot ensemble accuracy heatmap
     plot_ensemble_heatmap(ensemble_accuracy, aug_types, n_augs)
     plot_synergy_profiles(ensemble_accuracy, aug_types)
 
-    mask = ~np.eye(n_augs, dtype=bool)
+    # plot ensemble accuracy vs angle
+    ens_mask = ~np.eye(n_augs, dtype=bool)
+    ens_angle_values  = angle_matrices[:, ens_mask].flatten()
+    ensemble_values   = ensemble_accuracy[ens_mask].flatten()
 
-    angle_values = angle_matrices[:, mask].flatten()
-    ensemble_values = ensemble_accuracy[mask].flatten()
-    combined_values = combined_accuracy[mask].flatten()
+    plot_combined_accuracy_heatmap(ens_angle_values, ensemble_values, f"{results_path}/{layer} angle vs ensemble accuracy")
+    plot_permutation_test(ens_angle_values, ensemble_values, n_permutations=100000, title=f"{results_path}/{layer} angle vs ensemble accuracy")
 
-    plot_combined_accuracy_heatmap(angle_values, combined_values, f"{results_path}/{layer} angle vs combined accuracy")
-    plot_combined_accuracy_heatmap(angle_values, ensemble_values, f"{results_path}/{layer} angle vs ensemble accuracy")
+    # plot combined accuracy vs angle matrix
+    n_all = len(combined_aug_types)
+    comb_mask = ~np.eye(n_all, dtype=bool)
+    comb_angle_values = angle_matrices[:, comb_mask].flatten()
+    combined_values   = combined_accuracy[comb_mask].flatten()
 
-    plot_permutation_test(angle_values, combined_values, n_permutations=100000, title=f"{results_path}/{layer} angle vs combined accuracy")
-    plot_permutation_test(angle_values, ensemble_values, n_permutations=100000, title=f"{results_path}/{layer} angle vs ensemble accuracy")
-
+    plot_combined_accuracy_heatmap(comb_angle_values, combined_values, f"{results_path}/{layer} angle vs combined accuracy")
+    plot_permutation_test(comb_angle_values, combined_values, n_permutations=100000, title=f"{results_path}/{layer} angle vs combined accuracy")

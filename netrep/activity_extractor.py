@@ -24,8 +24,10 @@ class LayerActivityExtractor:
 
         # Load model
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
-        
-        self.model = get_model(self.device, model_name, pretrained=pretrained)
+
+        num_classes = 1000 if dataset == "imagenet" else 10
+
+        self.model = get_model(self.device, model_name, pretrained=pretrained, num_classes=num_classes)
         self.model_name = model_name
         self.model.load_state_dict(checkpoint)
         self.model.eval().to(self.device)
@@ -110,7 +112,7 @@ class LayerActivityExtractor:
         """
         layers = {}
         if self.model_name == "resnet18" or self.model_name == "resnet50" or self.model_name == "resnet":
-            for i in range(3, 5):  # layer2..layer4
+            for i in range(2, 5):  # layer2..layer4
                 stage = getattr(model, f"layer{i}", None)
                 if stage is not None and len(stage) > 0:
                     layers[f"layer{i}.{len(stage)-1}"] = stage[-1]
@@ -136,8 +138,8 @@ class LayerActivityExtractor:
 
         if hasattr(model, "avgpool"):
             layers["avgpool"] = model.avgpool
-        if hasattr(model, "fc") and isinstance(model.fc, nn.Linear):
-            layers["fc"] = model.fc
+        # if hasattr(model, "fc") and isinstance(model.fc, nn.Linear):
+        #     layers["fc"] = model.fc
         return layers
 
     def _register_hooks(self):
