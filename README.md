@@ -1,6 +1,6 @@
 # netrep-analysis
 
-How does **data augmentation** affect the **geometry** of learned representations beyond better accuracy? This repo implements analyses in **shape space**, comparing layers with **Riemannian shape distance** (invariant to scaling, translation, rotation, and reflection). Stronger augmentation yields cleaner trajectories in that space; different augmentations move reps along different directions; geometry along trajectories relates to **ensembling** gains, with similar patterns across architectures and seeds.
+How does data augmentation affect the geometry of learned representations beyond better accuracy? This repo implements analyses in **shape space**, comparing layers with **Riemannian shape distance** (invariant to scaling, translation, rotation, and reflection). Increasing augmentation strength steers representation along structured trajectories in that space; different augmentations move reps along different directions; divergence between trajectories predicts ensembling gains, with similar patterns across architectures and seeds.
 
 **Pipeline:** `resnet.py` (train) → `extract_rep.py` (layer activity + distance matrices) → `repr_analysis.py` (plots / summaries).
 
